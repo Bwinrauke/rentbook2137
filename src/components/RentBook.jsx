@@ -34,6 +34,7 @@ export default function RentBook({ session, role }) {
   const [parking, setParking] = useState([]);
   const [monthStatus, setMonthStatus] = useState([]);
   const [parkingPaid, setParkingPaid] = useState({});
+  const [parkingNotes, setParkingNotes] = useState({});
   const [rawPayments, setRawPayments] = useState([]);
   const [expenses, setExpenses] = useState([]);
   const [notes, setNotes] = useState([]);
@@ -66,9 +67,10 @@ export default function RentBook({ session, role }) {
   const loadMonth = useCallback(async (m) => {
     const [st, pp] = await Promise.all([paymentsApi.statusForMonth(m), parkingApi.paidForMonth(m)]);
     setMonthStatus(st.data || []);
-    const map = {};
-    (pp.data || []).forEach((r) => { map[r.spot_id] = +r.amount || 0; }); // spot_id -> received $
+    const map = {}, notesMap = {};
+    (pp.data || []).forEach((r) => { map[r.spot_id] = +r.amount || 0; notesMap[r.spot_id] = r.notes || ""; }); // spot_id -> received $ / note
     setParkingPaid(map);
+    setParkingNotes(notesMap);
   }, []);
 
   const loadLedger = useCallback(async () => {
@@ -241,6 +243,12 @@ export default function RentBook({ session, role }) {
     const { error } = await parkingApi.setReceived(spotId, month, amt);
     if (error) { flash("error", `Couldn't save parking — ${error.message}`); loadMonth(month); }
   }, [month, flash, loadMonth]);
+  // Save a free-text note for a parking spot this month.
+  const setParkingNote = useCallback(async (spotId, note) => {
+    setParkingNotes((n) => ({ ...n, [spotId]: note }));
+    const { error } = await parkingApi.setNote(spotId, month, note);
+    if (error) { flash("error", `Couldn't save parking note — ${error.message}`); loadMonth(month); }
+  }, [month, flash, loadMonth]);
 
   const NAV = [
     { id: "overview", label: "Overview", icon: LayoutDashboard },
@@ -369,7 +377,7 @@ export default function RentBook({ session, role }) {
           ) : (
             <>
               {view === "overview" && <Overview roll={roll} monthLabel={monthLabel} leaseAlerts={leaseAlerts} go={setView} parking={parking} parkingPaid={parkingPaid} monthExpenses={monthExpenses} />}
-              {view === "collections" && <Collections roll={roll} monthLabel={monthLabel} setPay={setPay} parking={parking} parkingRec={parkingPaid} setParkingReceived={setParkingReceived} />}
+              {view === "collections" && <Collections roll={roll} monthLabel={monthLabel} setPay={setPay} parking={parking} parkingRec={parkingPaid} parkingNotes={parkingNotes} setParkingReceived={setParkingReceived} setParkingNote={setParkingNote} />}
               {view === "ledger" && <Ledger tenants={activeTenants} terms={rentTerms} rawPayments={rawPayments} />}
               {view === "expenses" && <Expenses expenses={expenses} monthExpenses={monthExpenses} monthLabel={monthLabel} month={month} tenants={activeTenants} onAdd={addExpense} onRemove={removeExpense} />}
               {view === "tenants" && <Tenants tenants={tenants} onEdit={setEditTenant} onAdd={() => setEditTenant("new")} />}
@@ -832,7 +840,7 @@ function PLRow({ label, v }) {
 }
 
 /* ================= COLLECTIONS ================= */
-function Collections({ roll, monthLabel, setPay, parking = [], parkingRec = {}, setParkingReceived }) {
+function Collections({ roll, monthLabel, setPay, parking = [], parkingRec = {}, parkingNotes = {}, setParkingReceived, setParkingNote }) {
   const isMobile = useIsMobile();
   return (
     <div>
@@ -911,14 +919,14 @@ function Collections({ roll, monthLabel, setPay, parking = [], parkingRec = {}, 
       </div>
 
       {parking.length > 0 && setParkingReceived && (
-        <CollectionsParking parking={parking} parkingRec={parkingRec} setParkingReceived={setParkingReceived} monthLabel={monthLabel} />
+        <CollectionsParking parking={parking} parkingRec={parkingRec} parkingNotes={parkingNotes} setParkingReceived={setParkingReceived} setParkingNote={setParkingNote} monthLabel={monthLabel} />
       )}
     </div>
   );
 }
 
 /* Parking reconciliation inside Collections — enter the amount received per spot. */
-function CollectionsParking({ parking, parkingRec, setParkingReceived, monthLabel }) {
+function CollectionsParking({ parking, parkingRec, parkingNotes = {}, setParkingReceived, setParkingNote, monthLabel }) {
   const expected = parking.reduce((s, p) => s + (+p.amount || 0), 0);
   const collected = parking.reduce((s, p) => s + (+parkingRec[p.id] || 0), 0);
   return (
@@ -931,7 +939,9 @@ function CollectionsParking({ parking, parkingRec, setParkingReceived, monthLabe
         </div>
       </div>
       {parking.map((p, i) => (
-        <ParkingRow key={p.id} p={p} received={+parkingRec[p.id] || 0} onCommit={(v) => setParkingReceived(p.id, v)} last={i === parking.length - 1} />
+        <ParkingRow key={p.id} p={p} received={+parkingRec[p.id] || 0} onCommit={(v) => setParkingReceived(p.id, v)}
+          note={parkingNotes[p.id] || ""} onCommitNote={setParkingNote ? (v) => setParkingNote(p.id, v) : undefined}
+          last={i === parking.length - 1} />
       ))}
     </div>
   );
@@ -1748,14 +1758,15 @@ function Parking({ parking, parkingRec, monthLabel, setReceived, tenants = [], p
 }
 
 /* One parking spot's received-amount entry for the month (reconciled, not automatic). */
-function ParkingRow({ p, received, onCommit, onEdit, tenantLabel, last }) {
+function ParkingRow({ p, received, onCommit, onEdit, tenantLabel, note, onCommitNote, last }) {
   const expected = +p.amount || 0;
   // "In rent" spots are driven by the tenant's rent status (a DB trigger keeps
   // them in sync), so they're shown read-only here.
   const inRent = p.method === "In rent" && !!p.tenant_id;
   const status = received <= 0.001 ? "owed" : received + 0.5 >= expected ? "paid" : "partial";
   return (
-    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, padding: "13px 18px", borderBottom: last ? "none" : "1px solid #f2eee5" }}>
+    <div style={{ borderBottom: last ? "none" : "1px solid #f2eee5" }}>
+    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, padding: onCommitNote ? "13px 18px 4px" : "13px 18px" }}>
       <div style={{ display: "flex", alignItems: "center", gap: 12, minWidth: 0 }}>
         {onEdit ? (
           <button onClick={onEdit} title="Edit spot" style={{ ...S.brassPlaque, background: "#eef1f4", width: 34, height: 34, border: "none", cursor: "pointer" }}><Car size={16} color="#5a6472" /></button>
@@ -1787,6 +1798,12 @@ function ParkingRow({ p, received, onCommit, onEdit, tenantLabel, last }) {
         <Stamp status={status} />
         {onEdit && <button onClick={onEdit} style={{ ...S.iconBtn, color: "#b3ada1" }} title="Edit spot"><Pencil size={15} /></button>}
       </div>
+    </div>
+      {onCommitNote && (
+        <div style={{ padding: "0 18px 12px" }}>
+          <RowNote value={note} onCommit={onCommitNote} />
+        </div>
+      )}
     </div>
   );
 }

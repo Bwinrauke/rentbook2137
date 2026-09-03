@@ -93,6 +93,7 @@ create table if not exists parking_payments (
   month     text not null,
   paid      boolean not null default false,
   amount    numeric(10,2) not null default 0,   -- dollars actually received (reconciled)
+  notes     text,                                -- free-text note for this spot's month
   updated_at timestamptz not null default now(),
   unique (spot_id, month)
 );
