@@ -65,6 +65,9 @@ export const parkingApi = {
   // Record the dollars actually received for a spot in a month (reconciled).
   setReceived: (spot_id, month, amount) =>
     supabase.from("parking_payments").upsert({ spot_id, month, amount, paid: (+amount || 0) > 0.001 }, { onConflict: "spot_id,month" }),
+  // Free-text note for a spot's month (leaves the received amount untouched).
+  setNote: (spot_id, month, notes) =>
+    supabase.from("parking_payments").upsert({ spot_id, month, notes }, { onConflict: "spot_id,month" }),
 };
 
 /* ---------------- PAYMENTS ---------------- */
