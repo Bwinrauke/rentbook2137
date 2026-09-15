@@ -249,6 +249,22 @@ export default function RentBook({ session, role }) {
     const { error } = await parkingApi.setNote(spotId, month, note);
     if (error) { flash("error", `Couldn't save parking note — ${error.message}`); loadMonth(month); }
   }, [month, flash, loadMonth]);
+  // Deactivate / reactivate a parking spot (kept out of future months once they stop).
+  const setParkingActive = useCallback(async (spotId, active) => {
+    const { error } = await parkingApi.setActive(spotId, active);
+    if (error) { flash("error", `Couldn't update spot — ${error.message}`); return; }
+    await loadStatic();
+  }, [flash, loadStatic]);
+
+  // Parking spots visible for the month being viewed. An inactive spot still
+  // shows in the months it was active (it has payment/note data, or the month
+  // is before it was deactivated) but drops out of later months.
+  const visibleParking = useMemo(() => parking.filter((p) => {
+    if (p.active !== false) return true;                                // still active → every month
+    if ((+parkingPaid[p.id] || 0) > 0.001 || (parkingNotes[p.id] || "").trim() !== "") return true; // activity this month
+    const arch = (p.archived_at || "").slice(0, 7);                    // 'YYYY-MM' it was deactivated
+    return arch !== "" && month < arch;                                // months before deactivation
+  }), [parking, parkingPaid, parkingNotes, month]);
 
   const NAV = [
     { id: "overview", label: "Overview", icon: LayoutDashboard },
@@ -376,12 +392,12 @@ export default function RentBook({ session, role }) {
             <div style={{ color: "#8a8681", fontFamily: "'Space Grotesk',sans-serif", padding: 40 }}>Loading the rent book…</div>
           ) : (
             <>
-              {view === "overview" && <Overview roll={roll} monthLabel={monthLabel} leaseAlerts={leaseAlerts} go={setView} parking={parking} parkingPaid={parkingPaid} monthExpenses={monthExpenses} />}
-              {view === "collections" && <Collections roll={roll} monthLabel={monthLabel} setPay={setPay} parking={parking} parkingRec={parkingPaid} parkingNotes={parkingNotes} setParkingReceived={setParkingReceived} setParkingNote={setParkingNote} />}
+              {view === "overview" && <Overview roll={roll} monthLabel={monthLabel} leaseAlerts={leaseAlerts} go={setView} parking={visibleParking} parkingPaid={parkingPaid} monthExpenses={monthExpenses} />}
+              {view === "collections" && <Collections roll={roll} monthLabel={monthLabel} setPay={setPay} parking={visibleParking} parkingRec={parkingPaid} parkingNotes={parkingNotes} setParkingReceived={setParkingReceived} setParkingNote={setParkingNote} />}
               {view === "ledger" && <Ledger tenants={activeTenants} terms={rentTerms} rawPayments={rawPayments} />}
               {view === "expenses" && <Expenses expenses={expenses} monthExpenses={monthExpenses} monthLabel={monthLabel} month={month} tenants={activeTenants} onAdd={addExpense} onRemove={removeExpense} />}
               {view === "tenants" && <Tenants tenants={tenants} onEdit={setEditTenant} onAdd={() => setEditTenant("new")} />}
-              {view === "parking" && <Parking parking={parking} parkingRec={parkingPaid} monthLabel={monthLabel} setReceived={setParkingReceived} tenants={activeTenants} propertyId={propertyId} onChanged={loadStatic} flash={flash} />}
+              {view === "parking" && <Parking parking={parking} parkingRec={parkingPaid} monthLabel={monthLabel} setReceived={setParkingReceived} setActive={setParkingActive} tenants={activeTenants} propertyId={propertyId} onChanged={loadStatic} flash={flash} />}
               {view === "log" && <LogTab notes={buildingNotes} onAdd={(body) => addNote({ tenant_id: null, body })} onRemove={removeNote} />}
               {view === "summary" && <Summary tenants={activeTenants} allStatus={allStatus} allParkPaid={allParkPaid} parking={parking} expenses={expenses} onJump={(m) => { setMonth(m); setView("collections"); }} />}
               {view === "activity" && <Activity rows={audit} tenants={tenants} onRefresh={loadAudit} />}
@@ -1724,10 +1740,12 @@ function LogTab({ notes, onAdd, onRemove }) {
 }
 
 /* ================= PARKING ================= */
-function Parking({ parking, parkingRec, monthLabel, setReceived, tenants = [], propertyId, onChanged, flash }) {
+function Parking({ parking, parkingRec, monthLabel, setReceived, setActive, tenants = [], propertyId, onChanged, flash }) {
   const [edit, setEdit] = useState(null); // spot object, or "new"
-  const total = parking.reduce((s, p) => s + (+p.amount || 0), 0);
-  const collected = parking.reduce((s, p) => s + (+parkingRec[p.id] || 0), 0);
+  const active = parking.filter((p) => p.active !== false);
+  const inactive = parking.filter((p) => p.active === false);
+  const total = active.reduce((s, p) => s + (+p.amount || 0), 0);
+  const collected = active.reduce((s, p) => s + (+parkingRec[p.id] || 0), 0);
   const tenantName = (id) => { const t = tenants.find((x) => x.id === id); return t ? `${t.unit} · ${t.name}` : null; };
   return (
     <div>
@@ -1736,21 +1754,37 @@ function Parking({ parking, parkingRec, monthLabel, setReceived, tenants = [], p
         <button onClick={() => setEdit("new")} style={S.primaryBtn}><Plus size={16} /> Add spot</button>
       </div>
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(180px,1fr))", gap: 14, marginBottom: 18 }}>
-        <BigStat label={`Parking roll · ${monthLabel}`} value={money(total)} sub={`${parking.length} spots`} accent="#1c2836" />
+        <BigStat label={`Parking roll · ${monthLabel}`} value={money(total)} sub={`${active.length} active spot${active.length === 1 ? "" : "s"}`} accent="#1c2836" />
         <BigStat label="Collected" value={money(collected)} sub={`${money(Math.max(total - collected, 0))} outstanding`} accent="#0f7a54" />
       </div>
       <div style={{ ...S.card, padding: 0, overflow: "hidden" }}>
-        {parking.length === 0 ? (
-          <div style={{ padding: 24, textAlign: "center", color: "#8a8681", fontSize: 13 }}>No parking spots yet. Add one above — residents or non-residents.</div>
-        ) : parking.map((p, i) => (
-          <ParkingRow key={p.id} p={p} received={+parkingRec[p.id] || 0} onCommit={(v) => setReceived(p.id, v)} onEdit={() => setEdit(p)} tenantLabel={tenantName(p.tenant_id)} last={i === parking.length - 1} />
+        {active.length === 0 ? (
+          <div style={{ padding: 24, textAlign: "center", color: "#8a8681", fontSize: 13 }}>No active parking spots. Add one above — residents or non-residents.</div>
+        ) : active.map((p, i) => (
+          <ParkingRow key={p.id} p={p} received={+parkingRec[p.id] || 0} onCommit={(v) => setReceived(p.id, v)} onEdit={() => setEdit(p)} tenantLabel={tenantName(p.tenant_id)} last={i === active.length - 1} />
         ))}
       </div>
       <div style={{ fontSize: 12, color: "#8a8681", marginTop: 10, display: "flex", gap: 8, alignItems: "center" }}>
         <Pencil size={12} /> Tap a spot to edit its name, lot, price, or method. Enter the amount actually received each month — parking income also appears on Collections and the Overview.
       </div>
+
+      {inactive.length > 0 && (
+        <div style={{ marginTop: 26 }}>
+          <div style={{ ...S.cardTitle, marginBottom: 8, color: "#8a8681" }}>Inactive spots · {inactive.length}</div>
+          <div style={{ ...S.card, padding: 0, overflow: "hidden", opacity: 0.75 }}>
+            {inactive.map((p, i) => (
+              <ParkingRow key={p.id} p={p} received={0} inactive
+                onEdit={() => setEdit(p)} tenantLabel={tenantName(p.tenant_id)} last={i === inactive.length - 1} />
+            ))}
+          </div>
+          <div style={{ fontSize: 12, color: "#8a8681", marginTop: 8 }}>
+            Deactivated spots stay out of future months but keep every month they were active. Reopen one to reactivate it.
+          </div>
+        </div>
+      )}
+
       {edit && (
-        <ParkingModal spot={edit === "new" ? null : edit} tenants={tenants} propertyId={propertyId} flash={flash}
+        <ParkingModal spot={edit === "new" ? null : edit} tenants={tenants} propertyId={propertyId} flash={flash} setActive={setActive}
           onClose={() => setEdit(null)} onSaved={() => { setEdit(null); onChanged?.(); }} />
       )}
     </div>
@@ -1758,7 +1792,7 @@ function Parking({ parking, parkingRec, monthLabel, setReceived, tenants = [], p
 }
 
 /* One parking spot's received-amount entry for the month (reconciled, not automatic). */
-function ParkingRow({ p, received, onCommit, onEdit, tenantLabel, note, onCommitNote, last }) {
+function ParkingRow({ p, received, onCommit, onEdit, tenantLabel, note, onCommitNote, inactive, last }) {
   const expected = +p.amount || 0;
   // "In rent" spots are driven by the tenant's rent status (a DB trigger keeps
   // them in sync), so they're shown read-only here.
@@ -1774,9 +1808,12 @@ function ParkingRow({ p, received, onCommit, onEdit, tenantLabel, note, onCommit
           <div style={{ ...S.brassPlaque, background: "#eef1f4", width: 34, height: 34 }}><Car size={16} color="#5a6472" /></div>
         )}
         <div style={{ minWidth: 0 }}>
-          <div style={{ fontWeight: 600, fontSize: 14, color: "#1c2836", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", cursor: onEdit ? "pointer" : "default" }} onClick={onEdit}>{p.name || "(unnamed)"}</div>
+          <div style={{ display: "flex", alignItems: "center", gap: 7, minWidth: 0 }}>
+            <div style={{ fontWeight: 600, fontSize: 14, color: "#1c2836", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", cursor: onEdit ? "pointer" : "default" }} onClick={onEdit}>{p.name || "(unnamed)"}</div>
+            {inactive && <span style={{ fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: ".04em", color: "#8a8681", background: "#f0ece3", borderRadius: 5, padding: "2px 6px", flexShrink: 0 }}>Inactive</span>}
+          </div>
           <div style={{ fontSize: 11.5, color: "#8a8681" }}>
-            {p.spot} · {p.method} · expected <button onClick={() => onCommit(expected)} style={{ border: "none", background: "transparent", color: "#3a6ea5", fontWeight: 600, padding: 0, fontFamily: "'IBM Plex Mono',monospace", fontSize: 11.5 }}>{money(expected)}</button>
+            {p.spot} · {p.method} · expected <button onClick={() => onCommit?.(expected)} style={{ border: "none", background: "transparent", color: "#3a6ea5", fontWeight: 600, padding: 0, fontFamily: "'IBM Plex Mono',monospace", fontSize: 11.5, cursor: onCommit ? "pointer" : "default" }}>{money(expected)}</button>
             {tenantLabel === undefined ? null : tenantLabel ? <span style={{ color: "#7a5c17" }}> · {tenantLabel}</span> : <span style={{ color: "#a8a294" }}> · non-resident</span>}
           </div>
           {(p.plate || p.make || p.model || p.vehicle_year) && (
@@ -1787,15 +1824,21 @@ function ParkingRow({ p, received, onCommit, onEdit, tenantLabel, note, onCommit
         </div>
       </div>
       <div style={{ display: "flex", alignItems: "center", gap: 12, flexShrink: 0 }}>
-        <div style={{ textAlign: "right" }}>
-          <div style={{ fontSize: 10, color: "#a8a294", textTransform: "uppercase", letterSpacing: ".04em", marginBottom: 2 }}>{inRent ? "In rent · auto" : "Received"}</div>
-          {inRent ? (
-            <div title="Auto: paid when the tenant's rent is fully paid" style={{ fontFamily: "'IBM Plex Mono',monospace", fontWeight: 600, fontSize: 13, color: received > 0.5 ? "#1c2836" : "#9a958c", minWidth: 84, textAlign: "right", padding: "7px 0" }}>{received > 0.5 ? money(received) : "—"}</div>
-          ) : (
-            <NumCell value={received || ""} onCommit={onCommit} />
-          )}
-        </div>
-        <Stamp status={status} />
+        {inactive ? (
+          <div style={{ fontSize: 12, color: "#a8a294", fontStyle: "italic" }}>stopped parking</div>
+        ) : (
+          <>
+            <div style={{ textAlign: "right" }}>
+              <div style={{ fontSize: 10, color: "#a8a294", textTransform: "uppercase", letterSpacing: ".04em", marginBottom: 2 }}>{inRent ? "In rent · auto" : "Received"}</div>
+              {inRent ? (
+                <div title="Auto: paid when the tenant's rent is fully paid" style={{ fontFamily: "'IBM Plex Mono',monospace", fontWeight: 600, fontSize: 13, color: received > 0.5 ? "#1c2836" : "#9a958c", minWidth: 84, textAlign: "right", padding: "7px 0" }}>{received > 0.5 ? money(received) : "—"}</div>
+              ) : (
+                <NumCell value={received || ""} onCommit={onCommit} />
+              )}
+            </div>
+            <Stamp status={status} />
+          </>
+        )}
         {onEdit && <button onClick={onEdit} style={{ ...S.iconBtn, color: "#b3ada1" }} title="Edit spot"><Pencil size={15} /></button>}
       </div>
     </div>
@@ -1810,7 +1853,7 @@ function ParkingRow({ p, received, onCommit, onEdit, tenantLabel, note, onCommit
 
 /* Add / edit a parking spot — works for residents (assigned to a tenant) or
    non-residents (unassigned). */
-function ParkingModal({ spot, tenants, propertyId, onClose, onSaved, flash }) {
+function ParkingModal({ spot, tenants, propertyId, onClose, onSaved, flash, setActive }) {
   const [f, setF] = useState(spot || { name: "", spot: "", amount: 0, method: "Zelle", tenant_id: "", plate: "", make: "", model: "", vehicle_year: "" });
   const [confirmDel, setConfirmDel] = useState(false);
   const set = (k, v) => setF((p) => ({ ...p, [k]: v }));
@@ -1827,6 +1870,8 @@ function ParkingModal({ spot, tenants, propertyId, onClose, onSaved, flash }) {
     onSaved();
   };
   const del = async () => { const { error } = await parkingApi.removeSpot(spot.id); if (error) { flash?.("error", error.message); return; } onSaved(); };
+  const isInactive = spot?.active === false;
+  const toggleActive = async () => { await setActive?.(spot.id, isInactive); onSaved(); };
   return (
     <div style={S.overlay} onClick={onClose}>
       <div style={{ ...S.modal, width: 460 }} onClick={(e) => e.stopPropagation()}>
@@ -1865,6 +1910,11 @@ function ParkingModal({ spot, tenants, propertyId, onClose, onSaved, flash }) {
             ))}
           </div>
           <div style={{ display: "flex", gap: 10 }}>
+            {spot && setActive && (
+              <button onClick={toggleActive} style={{ ...S.ghostBtn, color: isInactive ? "#0f7a54" : "#7a5c17" }}>
+                {isInactive ? "Reactivate" : "Deactivate"}
+              </button>
+            )}
             <button onClick={onClose} style={S.ghostBtn}>Cancel</button>
             <button onClick={save} style={S.primaryBtn}>Save spot</button>
           </div>
