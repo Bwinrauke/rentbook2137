@@ -878,37 +878,44 @@ function Collections({ roll, monthLabel, setPay, parking = [], parkingRec = {}, 
           </div>
         ) : (
         <div style={{ overflowX: "auto" }}>
-          <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 1140 }}>
+          <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 980 }}>
             <thead>
               <tr>
-                {["Unit", "Tenant", "Lease rent", "Govt (HAP)", "Tenant portion", "Assistance", "Extra", "Check #", "Collected", "Variance", "Status", "Notes"].map((h, i) => (
+                {["Unit", "Tenant", "Lease rent", "Govt (HAP)", "Tenant portion", "Assistance", "Extra", "Check #", "Collected", "Variance", "Status"].map((h, i) => (
                   <th key={h} style={{ ...S.th, textAlign: i >= 2 && i <= 9 ? "right" : "left" }}>{h}</th>
                 ))}
               </tr>
             </thead>
             <tbody>
               {roll.rows.map(({ t, r, pay }) => (
-                <tr key={t.id} style={{ borderBottom: "1px solid #f2eee5" }}>
-                  <td style={S.td}><UnitChip unit={t.unit} /></td>
-                  <td style={S.td}>
+                <React.Fragment key={t.id}>
+                <tr>
+                  <td style={{ ...S.td, borderBottom: "none", paddingBottom: 2 }}><UnitChip unit={t.unit} /></td>
+                  <td style={{ ...S.td, borderBottom: "none", paddingBottom: 2 }}>
                     <div style={{ fontWeight: 600, fontSize: 13.5, color: "#1c2836" }}>{t.name}</div>
                     <div style={{ fontSize: 11, color: "#8a8681" }}>{t.program}</div>
                   </td>
-                  <td style={{ ...S.td, textAlign: "right" }}><Money v={r.rent} dim /></td>
-                  <td style={{ ...S.td, textAlign: "right" }}><NumCell value={pay.govt} onCommit={(v) => setPay(t.id, "govt", v)} /></td>
-                  <td style={{ ...S.td, textAlign: "right" }}><NumCell value={pay.portion} onCommit={(v) => setPay(t.id, "portion", v)} /></td>
-                  <td style={{ ...S.td, textAlign: "right" }}><NumCell value={pay.assistance} onCommit={(v) => setPay(t.id, "assistance", v)} /></td>
-                  <td style={{ ...S.td, textAlign: "right" }}><NumCell value={pay.extra} onCommit={(v) => setPay(t.id, "extra", v)} /></td>
-                  <td style={{ ...S.td, textAlign: "right" }}>
+                  <td style={{ ...S.td, textAlign: "right", borderBottom: "none", paddingBottom: 2 }}><Money v={r.rent} dim /></td>
+                  <td style={{ ...S.td, textAlign: "right", borderBottom: "none", paddingBottom: 2 }}><NumCell value={pay.govt} onCommit={(v) => setPay(t.id, "govt", v)} /></td>
+                  <td style={{ ...S.td, textAlign: "right", borderBottom: "none", paddingBottom: 2 }}><NumCell value={pay.portion} onCommit={(v) => setPay(t.id, "portion", v)} /></td>
+                  <td style={{ ...S.td, textAlign: "right", borderBottom: "none", paddingBottom: 2 }}><NumCell value={pay.assistance} onCommit={(v) => setPay(t.id, "assistance", v)} /></td>
+                  <td style={{ ...S.td, textAlign: "right", borderBottom: "none", paddingBottom: 2 }}><NumCell value={pay.extra} onCommit={(v) => setPay(t.id, "extra", v)} /></td>
+                  <td style={{ ...S.td, textAlign: "right", borderBottom: "none", paddingBottom: 2 }}>
                     <TextCell value={pay.check_num} onCommit={(v) => setPay(t.id, "check_num", v)} />
                   </td>
-                  <td style={{ ...S.td, textAlign: "right" }}><Money v={r.total} bold /></td>
-                  <td style={{ ...S.td, textAlign: "right" }}><Variance v={r.variance} /></td>
-                  <td style={{ ...S.td, textAlign: "right" }}><Stamp status={r.status} /></td>
-                  <td style={{ ...S.td, minWidth: 190 }}>
-                    <RowNote value={pay.notes} onCommit={(v) => setPay(t.id, "notes", v)} />
+                  <td style={{ ...S.td, textAlign: "right", borderBottom: "none", paddingBottom: 2 }}><Money v={r.total} bold /></td>
+                  <td style={{ ...S.td, textAlign: "right", borderBottom: "none", paddingBottom: 2 }}><Variance v={r.variance} /></td>
+                  <td style={{ ...S.td, textAlign: "right", borderBottom: "none", paddingBottom: 2 }}><Stamp status={r.status} /></td>
+                </tr>
+                <tr style={{ borderBottom: "1px solid #f2eee5" }}>
+                  <td colSpan={11} style={{ ...S.td, paddingTop: 0, paddingBottom: 12 }}>
+                    <div style={{ position: "sticky", left: 0, display: "flex", alignItems: "flex-start", gap: 10, width: "clamp(260px, 64vw, 720px)" }}>
+                      <span style={{ fontSize: 10.5, fontWeight: 600, color: "#a8a294", textTransform: "uppercase", letterSpacing: ".04em", paddingTop: 8, whiteSpace: "nowrap" }}>Notes</span>
+                      <div style={{ flex: 1 }}><NoteCell value={pay.notes} onCommit={(v) => setPay(t.id, "notes", v)} /></div>
+                    </div>
                   </td>
                 </tr>
+                </React.Fragment>
               ))}
             </tbody>
             <tfoot>
@@ -922,7 +929,6 @@ function Collections({ roll, monthLabel, setPay, parking = [], parkingRec = {}, 
                 <td style={S.td}></td>
                 <td style={{ ...S.td, textAlign: "right" }}><Money v={roll.collected} bold /></td>
                 <td style={{ ...S.td, textAlign: "right" }}><Variance v={-roll.outstanding} /></td>
-                <td style={S.td}></td>
                 <td style={S.td}></td>
               </tr>
             </tfoot>
