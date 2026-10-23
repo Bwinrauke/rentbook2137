@@ -58,7 +58,9 @@ create table if not exists parking_spots (
   plate        text,          -- vehicle license plate
   make         text,
   model        text,
-  vehicle_year int
+  vehicle_year int,
+  active       boolean not null default true, -- false once they stop parking with us
+  archived_at  timestamptz                    -- when the spot was deactivated
 );
 
 -- ============================================================
