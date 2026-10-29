@@ -156,7 +156,9 @@ export function buildLedger(tenants, terms, rawPayments, currentMonth) {
       const term = applicableTerm(tterms, m.key) || { lease_rent: t.lease_rent, govt_expected: t.govt_default, tenant_expected: t.portion_default };
       const pay = payMap[`${t.id}:${m.key}`];
       const govtRec = pay ? (+pay.govt + +pay.assistance) : 0;
-      const tenRec = pay ? +pay.portion : 0;
+      // Credit any "extra / other" collected to the tenant side, so extra
+      // payments reduce what's owed (otherwise the ledger ignores them).
+      const tenRec = pay ? (+pay.portion + (+pay.extra || 0)) : 0;
       const govtShort = (+term.govt_expected) - govtRec;
       const tenShort = (+term.tenant_expected) - tenRec;
       govtBal += govtShort; tenantBal += tenShort;
