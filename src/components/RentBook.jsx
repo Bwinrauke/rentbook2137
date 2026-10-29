@@ -790,6 +790,8 @@ function Overview({ roll, monthLabel, leaseAlerts, complianceAlerts = [], go, pa
   const cashParking = parking.filter((p) => !(p.method === "In rent" && p.tenant_id));
   const parkingCollected = cashParking.reduce((s, p) => s + (+parkingPaid[p.id] || 0), 0);
   if (parkingCollected > 0) income["Parking"] = parkingCollected;
+  const paidSpotCount = cashParking.filter((p) => (+parkingPaid[p.id] || 0) > 0).reduce((s, p) => s + (+p.spots || 1), 0);
+  const totalSpotCount = cashParking.reduce((s, p) => s + (+p.spots || 1), 0);
   const incomeRows = Object.entries(income).sort((a, b) => b[1] - a[1]);
   const totalIncome = incomeRows.reduce((s, [, v]) => s + v, 0);
   const totalExpenses = monthExpenses.reduce((s, e) => s + +e.amount, 0);
@@ -801,7 +803,7 @@ function Overview({ roll, monthLabel, leaseAlerts, complianceAlerts = [], go, pa
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(190px,1fr))", gap: 14, marginBottom: 22 }}>
         <BigStat label={`Expected · ${monthLabel}`} value={money(roll.expected)} sub={`${roll.rows.length} active units`} accent="#1c2836" />
         <BigStat label="Collected" value={money(roll.collected)} sub={`${rate}% of rent roll`} accent="#0f7a54" />
-        <BigStat label="Parking income" value={money(parkingCollected)} sub={`${cashParking.filter((p) => (+parkingPaid[p.id] || 0) > 0).length} of ${cashParking.length} spots paid`} accent="#3a6ea5" />
+        <BigStat label="Parking income" value={money(parkingCollected)} sub={`${paidSpotCount} of ${totalSpotCount} spots paid`} accent="#3a6ea5" />
         <BigStat label="Outstanding" value={money(roll.outstanding)} sub={`${roll.owedCt + roll.partialCt} units short`} accent={roll.outstanding > 0.5 ? "#a83232" : "#0f7a54"} />
         <BigStat label="Net operating" value={money(net)} sub={`${money(totalIncome)} in − ${money(totalExpenses)} out`} accent={net >= 0 ? "#0f7a54" : "#a83232"} />
       </div>
@@ -1727,17 +1729,17 @@ function TenantModal({ tenant, terms, tenantNotes, propertyId, onClose, onSave, 
 /* Parking spots owned by a tenant — add/remove, each with its own price + method. */
 function TenantParking({ tenant, propertyId, onChanged, flash, isMobile }) {
   const [spots, setSpots] = useState([]);
-  const [nw, setNw] = useState({ spot: "", amount: "", method: "Zelle" });
+  const [nw, setNw] = useState({ spot: "", amount: "", spots: "1", method: "Zelle" });
   const load = useCallback(async () => { const { data } = await parkingApi.forTenant(tenant.id); setSpots(data || []); }, [tenant.id]);
   useEffect(() => { load(); }, [load]);
   const add = async () => {
     if (!nw.spot.trim()) return;
     const { error } = await parkingApi.createSpot({
       tenant_id: tenant.id, property_id: propertyId, name: tenant.name,
-      spot: nw.spot.trim(), amount: parseFloat(nw.amount) || 0, method: nw.method,
+      spot: nw.spot.trim(), amount: parseFloat(nw.amount) || 0, spots: Math.max(1, parseInt(nw.spots, 10) || 1), method: nw.method,
     });
     if (error) { flash?.("error", error.message); return; }
-    setNw({ spot: "", amount: "", method: "Zelle" }); await load(); onChanged?.();
+    setNw({ spot: "", amount: "", spots: "1", method: "Zelle" }); await load(); onChanged?.();
   };
   const remove = async (id) => { const { error } = await parkingApi.removeSpot(id); if (error) { flash?.("error", error.message); return; } await load(); onChanged?.(); };
   return (
@@ -1749,15 +1751,16 @@ function TenantParking({ tenant, propertyId, onChanged, flash, isMobile }) {
         {spots.map((s) => (
           <div key={s.id} style={{ display: "flex", alignItems: "center", gap: 10, background: "#faf8f3", padding: "8px 12px", borderRadius: 8 }}>
             <div style={{ ...S.brassPlaque, background: "#eef1f4", width: 30, height: 30 }}><Car size={14} color="#5a6472" /></div>
-            <span style={{ fontWeight: 600, fontSize: 13, color: "#1c2836", minWidth: 60 }}>{s.spot}</span>
+            <span style={{ fontWeight: 600, fontSize: 13, color: "#1c2836", minWidth: 60 }}>{s.spot}{(+s.spots || 1) > 1 ? ` ·${s.spots}×` : ""}</span>
             <span style={{ fontSize: 12.5, color: "#5a5850" }}><Money v={s.amount} size={12.5} /> · {s.method}</span>
             <span style={{ flex: 1 }} />
             <button onClick={() => remove(s.id)} style={{ ...S.iconBtn, color: "#b3ada1" }}><Trash2 size={14} /></button>
           </div>
         ))}
       </div>
-      <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr 1fr" : "1.2fr 1fr 1fr auto", gap: 8, alignItems: "end" }}>
+      <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr 1fr" : "1.2fr .7fr 1fr 1fr auto", gap: 8, alignItems: "end" }}>
         <Field label="Spot / lot"><input style={S.field} placeholder="e.g. Lot 3" value={nw.spot} onChange={(e) => setNw((p) => ({ ...p, spot: e.target.value }))} /></Field>
+        <Field label="# spots"><input style={S.field} inputMode="numeric" placeholder="1" value={nw.spots} onChange={(e) => setNw((p) => ({ ...p, spots: e.target.value.replace(/[^0-9]/g, "") }))} /></Field>
         <Field label="Price"><input style={S.field} inputMode="decimal" placeholder="0" value={nw.amount} onChange={(e) => setNw((p) => ({ ...p, amount: e.target.value }))} /></Field>
         <Field label="Method">
           <select style={S.field} value={nw.method} onChange={(e) => setNw((p) => ({ ...p, method: e.target.value }))}>
@@ -1891,6 +1894,7 @@ function Parking({ parking, parkingRec, monthLabel, month, setReceived, setActiv
   const inactive = parking.filter((p) => !activeForMonth(p));
   const total = active.reduce((s, p) => s + (+p.amount || 0), 0);
   const collected = active.reduce((s, p) => s + (+parkingRec[p.id] || 0), 0);
+  const activeSpotCount = active.reduce((s, p) => s + (+p.spots || 1), 0);
   const tenantName = (id) => { const t = tenants.find((x) => x.id === id); return t ? `${t.unit} · ${t.name}` : null; };
   return (
     <div>
@@ -1899,7 +1903,7 @@ function Parking({ parking, parkingRec, monthLabel, month, setReceived, setActiv
         <button onClick={() => setEdit("new")} style={S.primaryBtn}><Plus size={16} /> Add spot</button>
       </div>
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(180px,1fr))", gap: 14, marginBottom: 18 }}>
-        <BigStat label={`Parking roll · ${monthLabel}`} value={money(total)} sub={`${active.length} active spot${active.length === 1 ? "" : "s"}`} accent="#1c2836" />
+        <BigStat label={`Parking roll · ${monthLabel}`} value={money(total)} sub={`${activeSpotCount} active spot${activeSpotCount === 1 ? "" : "s"}`} accent="#1c2836" />
         <BigStat label="Collected" value={money(collected)} sub={`${money(Math.max(total - collected, 0))} outstanding`} accent="#0f7a54" />
       </div>
       <div style={{ ...S.card, padding: 0, overflow: "hidden" }}>
@@ -1958,7 +1962,7 @@ function ParkingRow({ p, received, onCommit, onEdit, tenantLabel, note, onCommit
             {inactive && <span style={{ fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: ".04em", color: "#8a8681", background: "#f0ece3", borderRadius: 5, padding: "2px 6px", flexShrink: 0 }}>Inactive</span>}
           </div>
           <div style={{ fontSize: 11.5, color: "#8a8681" }}>
-            {p.spot} · {p.method} · expected <button onClick={() => onCommit?.(expected)} style={{ border: "none", background: "transparent", color: "#3a6ea5", fontWeight: 600, padding: 0, fontFamily: "'IBM Plex Mono',monospace", fontSize: 11.5, cursor: onCommit ? "pointer" : "default" }}>{money(expected)}</button>
+            {p.spot}{(+p.spots || 1) > 1 ? ` · ${p.spots} spots` : ""} · {p.method} · expected <button onClick={() => onCommit?.(expected)} style={{ border: "none", background: "transparent", color: "#3a6ea5", fontWeight: 600, padding: 0, fontFamily: "'IBM Plex Mono',monospace", fontSize: 11.5, cursor: onCommit ? "pointer" : "default" }}>{money(expected)}</button>
             {tenantLabel === undefined ? null : tenantLabel ? <span style={{ color: "#7a5c17" }}> · {tenantLabel}</span> : <span style={{ color: "#a8a294" }}> · non-resident</span>}
           </div>
           {p.phone && (
@@ -2004,14 +2008,15 @@ function ParkingRow({ p, received, onCommit, onEdit, tenantLabel, note, onCommit
 /* Add / edit a parking spot — works for residents (assigned to a tenant) or
    non-residents (unassigned). */
 function ParkingModal({ spot, tenants, propertyId, onClose, onSaved, flash, setActive }) {
-  const [f, setF] = useState(spot || { name: "", spot: "", amount: 0, method: "Zelle", tenant_id: "", phone: "", plate: "", make: "", model: "", vehicle_year: "" });
+  const [f, setF] = useState(spot || { name: "", spot: "", amount: 0, spots: 1, method: "Zelle", tenant_id: "", phone: "", plate: "", make: "", model: "", vehicle_year: "" });
   const [confirmDel, setConfirmDel] = useState(false);
   const set = (k, v) => setF((p) => ({ ...p, [k]: v }));
   const save = async () => {
     if (!(f.name || "").trim() && !(f.spot || "").trim()) { flash?.("error", "Add a name or a lot/spot label."); return; }
     const payload = {
       name: (f.name || "").trim(), spot: (f.spot || "").trim(),
-      amount: parseFloat(f.amount) || 0, method: f.method, tenant_id: f.tenant_id || null, property_id: propertyId,
+      amount: parseFloat(f.amount) || 0, spots: Math.max(1, parseInt(f.spots, 10) || 1),
+      method: f.method, tenant_id: f.tenant_id || null, property_id: propertyId,
       phone: (f.phone || "").trim() || null,
       plate: (f.plate || "").trim() || null, make: (f.make || "").trim() || null, model: (f.model || "").trim() || null,
       vehicle_year: f.vehicle_year === "" || f.vehicle_year == null ? null : parseInt(f.vehicle_year, 10) || null,
@@ -2032,8 +2037,9 @@ function ParkingModal({ spot, tenants, propertyId, onClose, onSaved, flash, setA
         </div>
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
           <Field label="Renter name" span={2}><input style={S.field} placeholder="Who rents this spot" value={f.name || ""} onChange={(e) => set("name", e.target.value)} /></Field>
-          <Field label="Spot / lot"><input style={S.field} placeholder="e.g. Lot 3" value={f.spot || ""} onChange={(e) => set("spot", e.target.value)} /></Field>
-          <Field label="Monthly price"><input style={S.field} inputMode="decimal" value={f.amount} onChange={(e) => set("amount", e.target.value === "" ? 0 : parseFloat(e.target.value) || 0)} /></Field>
+          <Field label="Spot / lot"><input style={S.field} placeholder="e.g. Lot 3 (or 5 & 6)" value={f.spot || ""} onChange={(e) => set("spot", e.target.value)} /></Field>
+          <Field label="# of spots"><input style={S.field} inputMode="numeric" placeholder="1" value={f.spots ?? 1} onChange={(e) => set("spots", e.target.value.replace(/[^0-9]/g, ""))} /></Field>
+          <Field label={`Monthly price${(parseInt(f.spots, 10) || 1) > 1 ? " (total)" : ""}`}><input style={S.field} inputMode="decimal" value={f.amount} onChange={(e) => set("amount", e.target.value === "" ? 0 : parseFloat(e.target.value) || 0)} /></Field>
           <Field label="Method">
             <select style={S.field} value={f.method || "Zelle"} onChange={(e) => set("method", e.target.value)}>
               {["Zelle", "Cash", "Check", "In rent", "Other"].map((m) => <option key={m} value={m}>{m}</option>)}
