@@ -58,9 +58,14 @@ export const parkingApi = {
   createSpot: (row) => supabase.from("parking_spots").insert(row).select().single(),
   updateSpot: (id, patch) => supabase.from("parking_spots").update(patch).eq("id", id).select().single(),
   // Deactivate a spot (they stopped parking) or reactivate it. Past months are
-  // preserved — deactivating only hides the spot from months after it stopped.
-  setActive: (id, active) =>
-    supabase.from("parking_spots").update({ active, archived_at: active ? null : new Date().toISOString() }).eq("id", id),
+  // preserved — deactivating only hides the spot from months AFTER `cutoffMonth`
+  // (the month being worked in), which is stamped into archived_at. Reactivating
+  // clears it so the spot shows everywhere again.
+  setActive: (id, active, cutoffMonth) =>
+    supabase.from("parking_spots").update({
+      active,
+      archived_at: active ? null : `${cutoffMonth || new Date().toISOString().slice(0, 7)}-01T12:00:00Z`,
+    }).eq("id", id),
   removeSpot: (id) => supabase.from("parking_spots").delete().eq("id", id),
   paidForMonth: (month) => supabase.from("parking_payments").select("*").eq("month", month),
   allPaid: () => supabase.from("parking_payments").select("spot_id, month, paid, amount"),
