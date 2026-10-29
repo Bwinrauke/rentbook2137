@@ -249,21 +249,23 @@ export default function RentBook({ session, role }) {
     const { error } = await parkingApi.setNote(spotId, month, note);
     if (error) { flash("error", `Couldn't save parking note — ${error.message}`); loadMonth(month); }
   }, [month, flash, loadMonth]);
-  // Deactivate / reactivate a parking spot (kept out of future months once they stop).
+  // Deactivate / reactivate a parking spot. Deactivating keeps the spot in the
+  // month being viewed and every earlier month, and hides it only from later
+  // months (the cutoff is the current month, not the wall-clock date).
   const setParkingActive = useCallback(async (spotId, active) => {
-    const { error } = await parkingApi.setActive(spotId, active);
+    const { error } = await parkingApi.setActive(spotId, active, month);
     if (error) { flash("error", `Couldn't update spot — ${error.message}`); return; }
     await loadStatic();
-  }, [flash, loadStatic]);
+  }, [flash, loadStatic, month]);
 
-  // Parking spots visible for the month being viewed. An inactive spot still
-  // shows in the months it was active (it has payment/note data, or the month
-  // is before it was deactivated) but drops out of later months.
+  // Parking spots visible for the month being viewed. A deactivated spot still
+  // shows in the month it was deactivated and every earlier month (or any month
+  // it has payment/note data) but drops out of later months.
   const visibleParking = useMemo(() => parking.filter((p) => {
     if (p.active !== false) return true;                                // still active → every month
     if ((+parkingPaid[p.id] || 0) > 0.001 || (parkingNotes[p.id] || "").trim() !== "") return true; // activity this month
     const arch = (p.archived_at || "").slice(0, 7);                    // 'YYYY-MM' it was deactivated
-    return arch !== "" && month < arch;                                // months before deactivation
+    return arch !== "" && month <= arch;                               // that month and earlier stay; later months drop
   }), [parking, parkingPaid, parkingNotes, month]);
 
   const NAV = [
