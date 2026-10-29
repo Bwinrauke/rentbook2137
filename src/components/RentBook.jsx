@@ -434,7 +434,7 @@ export default function RentBook({ session, role }) {
               {view === "ledger" && <Ledger tenants={tenants} terms={rentTerms} rawPayments={rawPayments} />}
               {view === "expenses" && <Expenses expenses={expenses} monthExpenses={monthExpenses} monthLabel={monthLabel} month={month} tenants={activeTenants} onAdd={addExpense} onRemove={removeExpense} />}
               {view === "tenants" && <Tenants tenants={tenants} onEdit={setEditTenant} onAdd={() => setEditTenant("new")} />}
-              {view === "parking" && <Parking parking={parking} parkingRec={parkingPaid} monthLabel={monthLabel} setReceived={setParkingReceived} setActive={setParkingActive} tenants={activeTenants} propertyId={propertyId} onChanged={loadStatic} flash={flash} />}
+              {view === "parking" && <Parking parking={parking} parkingRec={parkingPaid} monthLabel={monthLabel} month={month} setReceived={setParkingReceived} setActive={setParkingActive} tenants={activeTenants} propertyId={propertyId} onChanged={loadStatic} flash={flash} />}
               {view === "log" && <LogTab notes={buildingNotes} onAdd={(body) => addNote({ tenant_id: null, body })} onRemove={removeNote} />}
               {view === "summary" && <Summary tenants={tenants} allStatus={allStatus} allParkPaid={allParkPaid} parking={parking} expenses={expenses} onJump={(m) => { setMonth(m); setView("collections"); }} />}
               {view === "activity" && <Activity rows={audit} tenants={tenants} onRefresh={loadAudit} />}
@@ -1876,10 +1876,19 @@ function LogTab({ notes, onAdd, onRemove }) {
 }
 
 /* ================= PARKING ================= */
-function Parking({ parking, parkingRec, monthLabel, setReceived, setActive, tenants = [], propertyId, onChanged, flash }) {
+function Parking({ parking, parkingRec, monthLabel, month, setReceived, setActive, tenants = [], propertyId, onChanged, flash }) {
   const [edit, setEdit] = useState(null); // spot object, or "new"
-  const active = parking.filter((p) => p.active !== false);
-  const inactive = parking.filter((p) => p.active === false);
+  // Month-aware, like Collections: a deactivated spot still counts as active for
+  // the months up to and including its cutoff, and only drops to "Inactive" for
+  // months after it stopped — so a spot deactivated in September is still
+  // editable in September and earlier, not hidden everywhere.
+  const activeForMonth = (p) => {
+    if (p.active !== false) return true;
+    const arch = (p.archived_at || "").slice(0, 7);
+    return arch !== "" && month <= arch;
+  };
+  const active = parking.filter(activeForMonth);
+  const inactive = parking.filter((p) => !activeForMonth(p));
   const total = active.reduce((s, p) => s + (+p.amount || 0), 0);
   const collected = active.reduce((s, p) => s + (+parkingRec[p.id] || 0), 0);
   const tenantName = (id) => { const t = tenants.find((x) => x.id === id); return t ? `${t.unit} · ${t.name}` : null; };
@@ -1906,7 +1915,7 @@ function Parking({ parking, parkingRec, monthLabel, setReceived, setActive, tena
 
       {inactive.length > 0 && (
         <div style={{ marginTop: 26 }}>
-          <div style={{ ...S.cardTitle, marginBottom: 8, color: "#8a8681" }}>Inactive spots · {inactive.length}</div>
+          <div style={{ ...S.cardTitle, marginBottom: 8, color: "#8a8681" }}>Inactive for {monthLabel} · {inactive.length}</div>
           <div style={{ ...S.card, padding: 0, overflow: "hidden", opacity: 0.75 }}>
             {inactive.map((p, i) => (
               <ParkingRow key={p.id} p={p} received={0} inactive
@@ -1914,7 +1923,7 @@ function Parking({ parking, parkingRec, monthLabel, setReceived, setActive, tena
             ))}
           </div>
           <div style={{ fontSize: 12, color: "#8a8681", marginTop: 8 }}>
-            Deactivated spots stay out of future months but keep every month they were active. Reopen one to reactivate it.
+            These spots stopped before {monthLabel}. Switch to an earlier month to see them live and editable, or reopen one to reactivate it.
           </div>
         </div>
       )}
