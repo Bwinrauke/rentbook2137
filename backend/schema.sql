@@ -55,6 +55,7 @@ create table if not exists parking_spots (
   spot         text not null,
   amount       numeric(10,2) not null default 0,
   method       text default 'Zelle',
+  phone        text,          -- contact number (esp. for non-resident parkers)
   plate        text,          -- vehicle license plate
   make         text,
   model        text,

@@ -1961,6 +1961,11 @@ function ParkingRow({ p, received, onCommit, onEdit, tenantLabel, note, onCommit
             {p.spot} · {p.method} · expected <button onClick={() => onCommit?.(expected)} style={{ border: "none", background: "transparent", color: "#3a6ea5", fontWeight: 600, padding: 0, fontFamily: "'IBM Plex Mono',monospace", fontSize: 11.5, cursor: onCommit ? "pointer" : "default" }}>{money(expected)}</button>
             {tenantLabel === undefined ? null : tenantLabel ? <span style={{ color: "#7a5c17" }}> · {tenantLabel}</span> : <span style={{ color: "#a8a294" }}> · non-resident</span>}
           </div>
+          {p.phone && (
+            <div style={{ fontSize: 11.5, color: "#8a8681", marginTop: 1, display: "flex", alignItems: "center", gap: 4 }}>
+              <Phone size={11} /> <a href={`tel:${p.phone}`} style={{ color: "#3a6ea5", textDecoration: "none" }}>{p.phone}</a>
+            </div>
+          )}
           {(p.plate || p.make || p.model || p.vehicle_year) && (
             <div style={{ fontSize: 11, color: "#a29d92", marginTop: 1, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
               {[p.vehicle_year, p.make, p.model].filter(Boolean).join(" ")}{p.plate ? ` · ${p.plate}` : ""}
@@ -1999,7 +2004,7 @@ function ParkingRow({ p, received, onCommit, onEdit, tenantLabel, note, onCommit
 /* Add / edit a parking spot — works for residents (assigned to a tenant) or
    non-residents (unassigned). */
 function ParkingModal({ spot, tenants, propertyId, onClose, onSaved, flash, setActive }) {
-  const [f, setF] = useState(spot || { name: "", spot: "", amount: 0, method: "Zelle", tenant_id: "", plate: "", make: "", model: "", vehicle_year: "" });
+  const [f, setF] = useState(spot || { name: "", spot: "", amount: 0, method: "Zelle", tenant_id: "", phone: "", plate: "", make: "", model: "", vehicle_year: "" });
   const [confirmDel, setConfirmDel] = useState(false);
   const set = (k, v) => setF((p) => ({ ...p, [k]: v }));
   const save = async () => {
@@ -2007,6 +2012,7 @@ function ParkingModal({ spot, tenants, propertyId, onClose, onSaved, flash, setA
     const payload = {
       name: (f.name || "").trim(), spot: (f.spot || "").trim(),
       amount: parseFloat(f.amount) || 0, method: f.method, tenant_id: f.tenant_id || null, property_id: propertyId,
+      phone: (f.phone || "").trim() || null,
       plate: (f.plate || "").trim() || null, make: (f.make || "").trim() || null, model: (f.model || "").trim() || null,
       vehicle_year: f.vehicle_year === "" || f.vehicle_year == null ? null : parseInt(f.vehicle_year, 10) || null,
     };
@@ -2039,6 +2045,7 @@ function ParkingModal({ spot, tenants, propertyId, onClose, onSaved, flash, setA
               {tenants.map((t) => <option key={t.id} value={t.id}>{t.unit} · {t.name}</option>)}
             </select>
           </Field>
+          <Field label="Phone" span={2}><input style={S.field} type="tel" placeholder="Contact number (for non-residents)" value={f.phone || ""} onChange={(e) => set("phone", e.target.value)} /></Field>
 
           <FormSection>Vehicle</FormSection>
           <Field label="License plate"><input style={S.field} value={f.plate || ""} onChange={(e) => set("plate", e.target.value)} /></Field>
