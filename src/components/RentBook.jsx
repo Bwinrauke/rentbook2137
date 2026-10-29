@@ -294,15 +294,15 @@ export default function RentBook({ session, role }) {
   }, [flash, loadStatic, month]);
 
   // Parking spots visible for the month being viewed. A spot shows in any month
-  // it has payment/note data; otherwise it's bounded by when it started (new
-  // spots don't appear before start_month) and when it was deactivated.
+  // it has payment/note data; otherwise it runs from the month it started
+  // (start_month) up to — but not including — the month it was deactivated.
   const visibleParking = useMemo(() => parking.filter((p) => {
     if ((+parkingPaid[p.id] || 0) > 0.001 || (parkingNotes[p.id] || "").trim() !== "") return true; // real activity this month
     const start = p.start_month || "";                                 // 'YYYY-MM' it began (legacy spots: none)
     if (start && month < start) return false;                          // before it existed → hide
     if (p.active !== false) return true;                               // started + active → show
-    const arch = (p.archived_at || "").slice(0, 7);                   // 'YYYY-MM' it was deactivated
-    return arch !== "" && month <= arch;                               // that month and earlier stay; later months drop
+    const arch = (p.archived_at || "").slice(0, 7);                   // 'YYYY-MM' it was deactivated (first inactive month)
+    return arch !== "" && month < arch;                                // active up to the month before it stopped
   }), [parking, parkingPaid, parkingNotes, month]);
 
   const NAV = [
@@ -1888,15 +1888,15 @@ function LogTab({ notes, onAdd, onRemove }) {
 /* ================= PARKING ================= */
 function Parking({ parking, parkingRec, monthLabel, month, setReceived, setActive, tenants = [], propertyId, onChanged, flash }) {
   const [edit, setEdit] = useState(null); // spot object, or "new"
-  // Month-aware, like Collections: a spot counts for the months from when it
-  // started through its deactivation cutoff. New spots don't appear before the
-  // month they were added; deactivated spots drop off after their cutoff.
+  // Month-aware, like Collections: a spot counts from the month it started up to
+  // the month before its deactivation. New spots don't appear before they were
+  // added; a spot deactivated in a month is inactive from that month on.
   const startedBy = (p) => !p.start_month || month >= p.start_month;
   const activeForMonth = (p) => {
     if (!startedBy(p)) return false;
     if (p.active !== false) return true;
     const arch = (p.archived_at || "").slice(0, 7);
-    return arch !== "" && month <= arch;
+    return arch !== "" && month < arch;
   };
   const inScope = parking.filter(startedBy);
   const active = inScope.filter(activeForMonth);
@@ -1936,7 +1936,7 @@ function Parking({ parking, parkingRec, monthLabel, month, setReceived, setActiv
             ))}
           </div>
           <div style={{ fontSize: 12, color: "#8a8681", marginTop: 8 }}>
-            These spots stopped before {monthLabel}. Switch to an earlier month to see them live and editable, or reopen one to reactivate it.
+            These spots aren't active for {monthLabel} (not started yet, or already stopped). Switch to a month they were active to see them editable, or reopen one to reactivate it.
           </div>
         </div>
       )}
@@ -2017,7 +2017,7 @@ function ParkingRow({ p, received, onCommit, onEdit, tenantLabel, note, onCommit
 /* Add / edit a parking spot — works for residents (assigned to a tenant) or
    non-residents (unassigned). */
 function ParkingModal({ spot, tenants, propertyId, onClose, onSaved, flash, setActive, month }) {
-  const [f, setF] = useState(spot || { name: "", spot: "", amount: 0, spots: 1, method: "Zelle", tenant_id: "", phone: "", plate: "", make: "", model: "", vehicle_year: "" });
+  const [f, setF] = useState(spot || { name: "", spot: "", amount: 0, spots: 1, method: "Zelle", tenant_id: "", phone: "", plate: "", make: "", model: "", vehicle_year: "", start_month: "" });
   const [confirmDel, setConfirmDel] = useState(false);
   const set = (k, v) => setF((p) => ({ ...p, [k]: v }));
   const save = async () => {
@@ -2030,8 +2030,9 @@ function ParkingModal({ spot, tenants, propertyId, onClose, onSaved, flash, setA
       plate: (f.plate || "").trim() || null, make: (f.make || "").trim() || null, model: (f.model || "").trim() || null,
       vehicle_year: f.vehicle_year === "" || f.vehicle_year == null ? null : parseInt(f.vehicle_year, 10) || null,
     };
-    // New spots start in the month being viewed, so they don't appear in prior months.
-    if (!spot?.id && month) payload.start_month = month;
+    // Month the spot begins: the chosen "Starts" month, else the month being
+    // viewed when it's first created. It won't appear in months before this.
+    payload.start_month = (f.start_month || "").slice(0, 7) || (!spot?.id ? (month || null) : null);
     const { error } = spot?.id ? await parkingApi.updateSpot(spot.id, payload) : await parkingApi.createSpot(payload);
     if (error) { flash?.("error", error.message); return; }
     onSaved();
@@ -2062,6 +2063,7 @@ function ParkingModal({ spot, tenants, propertyId, onClose, onSaved, flash, setA
               {tenants.map((t) => <option key={t.id} value={t.id}>{t.unit} · {t.name}</option>)}
             </select>
           </Field>
+          <Field label="Starts (month)"><input style={S.field} type="month" value={(f.start_month || "").slice(0, 7)} onChange={(e) => set("start_month", e.target.value)} /></Field>
           <Field label="Phone" span={2}><input style={S.field} type="tel" placeholder="Contact number (for non-residents)" value={f.phone || ""} onChange={(e) => set("phone", e.target.value)} /></Field>
 
           <FormSection>Vehicle</FormSection>
