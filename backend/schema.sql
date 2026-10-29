@@ -62,7 +62,8 @@ create table if not exists parking_spots (
   model        text,
   vehicle_year int,
   active       boolean not null default true, -- false once they stop parking with us
-  archived_at  timestamptz                    -- when the spot was deactivated
+  archived_at  timestamptz,                   -- when the spot was deactivated
+  start_month  text                           -- 'YYYY-MM' the spot began (new spots don't show before this)
 );
 
 -- ============================================================

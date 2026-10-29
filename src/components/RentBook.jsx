@@ -293,13 +293,15 @@ export default function RentBook({ session, role }) {
     await loadStatic();
   }, [flash, loadStatic, month]);
 
-  // Parking spots visible for the month being viewed. A deactivated spot still
-  // shows in the month it was deactivated and every earlier month (or any month
-  // it has payment/note data) but drops out of later months.
+  // Parking spots visible for the month being viewed. A spot shows in any month
+  // it has payment/note data; otherwise it's bounded by when it started (new
+  // spots don't appear before start_month) and when it was deactivated.
   const visibleParking = useMemo(() => parking.filter((p) => {
-    if (p.active !== false) return true;                                // still active → every month
-    if ((+parkingPaid[p.id] || 0) > 0.001 || (parkingNotes[p.id] || "").trim() !== "") return true; // activity this month
-    const arch = (p.archived_at || "").slice(0, 7);                    // 'YYYY-MM' it was deactivated
+    if ((+parkingPaid[p.id] || 0) > 0.001 || (parkingNotes[p.id] || "").trim() !== "") return true; // real activity this month
+    const start = p.start_month || "";                                 // 'YYYY-MM' it began (legacy spots: none)
+    if (start && month < start) return false;                          // before it existed → hide
+    if (p.active !== false) return true;                               // started + active → show
+    const arch = (p.archived_at || "").slice(0, 7);                   // 'YYYY-MM' it was deactivated
     return arch !== "" && month <= arch;                               // that month and earlier stay; later months drop
   }), [parking, parkingPaid, parkingNotes, month]);
 
@@ -318,12 +320,15 @@ export default function RentBook({ session, role }) {
   const monthLabel = monthLabelFor(month);
   // Month list spans a generous window and always stretches to include the
   // selected month, so the prev/next arrows can reach any month on demand.
+  // Listed newest-first so the current/recent months are at the top of the picker.
   const monthOptions = useMemo(() => {
     const start = month < "2025-07" ? month : "2025-07";
-    let end = addMonths(thisMonthKey(), 18);
+    // Small forward buffer so recent months stay near the top; the next arrow
+    // still reaches any future month, which widens this list on demand.
+    let end = addMonths(thisMonthKey(), 2);
     if (month > end) end = month;
     if (CURRENT_MONTH > end) end = CURRENT_MONTH;
-    return monthRange(start, end);
+    return monthRange(start, end).reverse();
   }, [month]);
   const shiftMonth = useCallback((n) => setMonth((mm) => addMonths(mm, n)), []);
   const modalTerms = editTenant && editTenant !== "new" ? rentTerms.filter((rt) => rt.tenant_id === editTenant.id) : [];
@@ -449,6 +454,7 @@ export default function RentBook({ session, role }) {
           terms={modalTerms}
           tenantNotes={modalNotes}
           propertyId={propertyId}
+          month={month}
           onClose={() => setEditTenant(null)}
           onSave={saveTenant}
           onDelete={deleteTenant}
@@ -1607,7 +1613,7 @@ function FormSection({ children }) {
   );
 }
 
-function TenantModal({ tenant, terms, tenantNotes, propertyId, onClose, onSave, onDelete, onArchive, onAddTerm, onRemoveTerm, onAddNote, onRemoveNote, onParkingChanged, flash }) {
+function TenantModal({ tenant, terms, tenantNotes, propertyId, month, onClose, onSave, onDelete, onArchive, onAddTerm, onRemoveTerm, onAddNote, onRemoveNote, onParkingChanged, flash }) {
   const isMobile = useIsMobile();
   const [f, setF] = useState(tenant || {
     name: "", unit: "", beds: "2BR", lease_rent: 0, deposit: 0, lease_start: "", lease_end: "", move_in_date: "",
@@ -1688,7 +1694,7 @@ function TenantModal({ tenant, terms, tenantNotes, propertyId, onClose, onSave, 
         </div>
 
         {tenant && (
-          <TenantParking tenant={tenant} propertyId={propertyId} onChanged={onParkingChanged} flash={flash} isMobile={isMobile} />
+          <TenantParking tenant={tenant} propertyId={propertyId} month={month} onChanged={onParkingChanged} flash={flash} isMobile={isMobile} />
         )}
 
         <RentSchedule tenant={tenant} terms={terms} onAddTerm={onAddTerm} onRemoveTerm={onRemoveTerm} />
@@ -1727,7 +1733,7 @@ function TenantModal({ tenant, terms, tenantNotes, propertyId, onClose, onSave, 
 }
 
 /* Parking spots owned by a tenant — add/remove, each with its own price + method. */
-function TenantParking({ tenant, propertyId, onChanged, flash, isMobile }) {
+function TenantParking({ tenant, propertyId, month, onChanged, flash, isMobile }) {
   const [spots, setSpots] = useState([]);
   const [nw, setNw] = useState({ spot: "", amount: "", spots: "1", method: "Zelle" });
   const load = useCallback(async () => { const { data } = await parkingApi.forTenant(tenant.id); setSpots(data || []); }, [tenant.id]);
@@ -1737,6 +1743,7 @@ function TenantParking({ tenant, propertyId, onChanged, flash, isMobile }) {
     const { error } = await parkingApi.createSpot({
       tenant_id: tenant.id, property_id: propertyId, name: tenant.name,
       spot: nw.spot.trim(), amount: parseFloat(nw.amount) || 0, spots: Math.max(1, parseInt(nw.spots, 10) || 1), method: nw.method,
+      ...(month ? { start_month: month } : {}),
     });
     if (error) { flash?.("error", error.message); return; }
     setNw({ spot: "", amount: "", spots: "1", method: "Zelle" }); await load(); onChanged?.();
@@ -1881,17 +1888,19 @@ function LogTab({ notes, onAdd, onRemove }) {
 /* ================= PARKING ================= */
 function Parking({ parking, parkingRec, monthLabel, month, setReceived, setActive, tenants = [], propertyId, onChanged, flash }) {
   const [edit, setEdit] = useState(null); // spot object, or "new"
-  // Month-aware, like Collections: a deactivated spot still counts as active for
-  // the months up to and including its cutoff, and only drops to "Inactive" for
-  // months after it stopped — so a spot deactivated in September is still
-  // editable in September and earlier, not hidden everywhere.
+  // Month-aware, like Collections: a spot counts for the months from when it
+  // started through its deactivation cutoff. New spots don't appear before the
+  // month they were added; deactivated spots drop off after their cutoff.
+  const startedBy = (p) => !p.start_month || month >= p.start_month;
   const activeForMonth = (p) => {
+    if (!startedBy(p)) return false;
     if (p.active !== false) return true;
     const arch = (p.archived_at || "").slice(0, 7);
     return arch !== "" && month <= arch;
   };
-  const active = parking.filter(activeForMonth);
-  const inactive = parking.filter((p) => !activeForMonth(p));
+  const inScope = parking.filter(startedBy);
+  const active = inScope.filter(activeForMonth);
+  const inactive = inScope.filter((p) => !activeForMonth(p));
   const total = active.reduce((s, p) => s + (+p.amount || 0), 0);
   const collected = active.reduce((s, p) => s + (+parkingRec[p.id] || 0), 0);
   const activeSpotCount = active.reduce((s, p) => s + (+p.spots || 1), 0);
@@ -1933,7 +1942,7 @@ function Parking({ parking, parkingRec, monthLabel, month, setReceived, setActiv
       )}
 
       {edit && (
-        <ParkingModal spot={edit === "new" ? null : edit} tenants={tenants} propertyId={propertyId} flash={flash} setActive={setActive}
+        <ParkingModal spot={edit === "new" ? null : edit} tenants={tenants} propertyId={propertyId} flash={flash} setActive={setActive} month={month}
           onClose={() => setEdit(null)} onSaved={() => { setEdit(null); onChanged?.(); }} />
       )}
     </div>
@@ -2007,7 +2016,7 @@ function ParkingRow({ p, received, onCommit, onEdit, tenantLabel, note, onCommit
 
 /* Add / edit a parking spot — works for residents (assigned to a tenant) or
    non-residents (unassigned). */
-function ParkingModal({ spot, tenants, propertyId, onClose, onSaved, flash, setActive }) {
+function ParkingModal({ spot, tenants, propertyId, onClose, onSaved, flash, setActive, month }) {
   const [f, setF] = useState(spot || { name: "", spot: "", amount: 0, spots: 1, method: "Zelle", tenant_id: "", phone: "", plate: "", make: "", model: "", vehicle_year: "" });
   const [confirmDel, setConfirmDel] = useState(false);
   const set = (k, v) => setF((p) => ({ ...p, [k]: v }));
@@ -2021,6 +2030,8 @@ function ParkingModal({ spot, tenants, propertyId, onClose, onSaved, flash, setA
       plate: (f.plate || "").trim() || null, make: (f.make || "").trim() || null, model: (f.model || "").trim() || null,
       vehicle_year: f.vehicle_year === "" || f.vehicle_year == null ? null : parseInt(f.vehicle_year, 10) || null,
     };
+    // New spots start in the month being viewed, so they don't appear in prior months.
+    if (!spot?.id && month) payload.start_month = month;
     const { error } = spot?.id ? await parkingApi.updateSpot(spot.id, payload) : await parkingApi.createSpot(payload);
     if (error) { flash?.("error", error.message); return; }
     onSaved();
