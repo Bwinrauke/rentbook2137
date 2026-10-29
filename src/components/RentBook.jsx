@@ -524,6 +524,9 @@ function Summary({ tenants, allStatus, allParkPaid, parking, expenses, onJump })
   // Scope the all-time data to this property's tenants / spots.
   const tenantIds = useMemo(() => new Set(tenants.map((t) => t.id)), [tenants]);
   const spotIds = useMemo(() => new Set(parking.map((p) => p.id)), [parking]);
+  // "In rent" parking is collected inside the rent, so its dollars are already
+  // in rent collected — exclude them here to avoid double-counting income.
+  const inRentSpotIds = useMemo(() => new Set(parking.filter((p) => p.method === "In rent" && p.tenant_id).map((p) => p.id)), [parking]);
   const scopedStatus = useMemo(() => allStatus.filter((s) => tenantIds.has(s.tenant_id)), [allStatus, tenantIds]);
 
   const rows = useMemo(() => {
@@ -552,15 +555,16 @@ function Summary({ tenants, allStatus, allParkPaid, parking, expenses, onJump })
         a.expected += +t.lease_rent || 0;
       });
     });
-    // parking collected per month (actual received amount, this property's spots)
-    allParkPaid.forEach((pp) => { if (spotIds.has(pp.spot_id)) bump(pp.month).parking += +pp.amount || 0; });
+    // parking collected per month (actual received amount, this property's
+    // spots) — excluding "in rent" spots, whose dollars are already in rent.
+    allParkPaid.forEach((pp) => { if (spotIds.has(pp.spot_id) && !inRentSpotIds.has(pp.spot_id)) bump(pp.month).parking += +pp.amount || 0; });
     // expenses per month
     expenses.forEach((e) => { const mk = (e.spent_on || "").slice(0, 7); if (mk) bump(mk).expenses += +e.amount || 0; });
 
     return Object.values(acc)
       .map((a) => ({ ...a, income: a.collected + a.parking, net: a.collected + a.parking - a.expenses, outstanding: Math.max(a.expected - a.collected, 0) }))
       .sort((x, y) => (x.period < y.period ? 1 : -1));
-  }, [scopedStatus, tenants, allParkPaid, spotIds, expenses, grouping]);
+  }, [scopedStatus, tenants, allParkPaid, spotIds, inRentSpotIds, expenses, grouping]);
 
   const tot = rows.reduce((s, r) => ({
     expected: s.expected + r.expected, collected: s.collected + r.collected, parking: s.parking + r.parking,
@@ -655,7 +659,7 @@ function Summary({ tenants, allStatus, allParkPaid, parking, expenses, onJump })
         )}
       </div>
       <div style={{ fontSize: 12, color: "#8a8681", marginTop: 10 }}>
-        Net operating = rent + parking collected − expenses. {grouping === "month" && "Tap a month to open it in Collections."}
+        Net operating = rent + parking collected − expenses. Parking excludes "in rent" spots (already counted in rent). {grouping === "month" && "Tap a month to open it in Collections."}
       </div>
     </div>
   );
@@ -781,7 +785,10 @@ function Overview({ roll, monthLabel, leaseAlerts, complianceAlerts = [], go, pa
     if (r.portion > 0) income["Tenant paid"] = (income["Tenant paid"] || 0) + r.portion;
     if (r.extra > 0) income["Extra / other"] = (income["Extra / other"] || 0) + r.extra;
   });
-  const parkingCollected = parking.reduce((s, p) => s + (+parkingPaid[p.id] || 0), 0);
+  // "In rent" spots are collected inside the rent, so they're tracked on the
+  // Parking page but not added again here (that would double-count income).
+  const cashParking = parking.filter((p) => !(p.method === "In rent" && p.tenant_id));
+  const parkingCollected = cashParking.reduce((s, p) => s + (+parkingPaid[p.id] || 0), 0);
   if (parkingCollected > 0) income["Parking"] = parkingCollected;
   const incomeRows = Object.entries(income).sort((a, b) => b[1] - a[1]);
   const totalIncome = incomeRows.reduce((s, [, v]) => s + v, 0);
@@ -794,7 +801,7 @@ function Overview({ roll, monthLabel, leaseAlerts, complianceAlerts = [], go, pa
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(190px,1fr))", gap: 14, marginBottom: 22 }}>
         <BigStat label={`Expected · ${monthLabel}`} value={money(roll.expected)} sub={`${roll.rows.length} active units`} accent="#1c2836" />
         <BigStat label="Collected" value={money(roll.collected)} sub={`${rate}% of rent roll`} accent="#0f7a54" />
-        <BigStat label="Parking income" value={money(parkingCollected)} sub={`${parking.filter((p) => (+parkingPaid[p.id] || 0) > 0).length} of ${parking.length} spots paid`} accent="#3a6ea5" />
+        <BigStat label="Parking income" value={money(parkingCollected)} sub={`${cashParking.filter((p) => (+parkingPaid[p.id] || 0) > 0).length} of ${cashParking.length} spots paid`} accent="#3a6ea5" />
         <BigStat label="Outstanding" value={money(roll.outstanding)} sub={`${roll.owedCt + roll.partialCt} units short`} accent={roll.outstanding > 0.5 ? "#a83232" : "#0f7a54"} />
         <BigStat label="Net operating" value={money(net)} sub={`${money(totalIncome)} in − ${money(totalExpenses)} out`} accent={net >= 0 ? "#0f7a54" : "#a83232"} />
       </div>
