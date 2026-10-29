@@ -83,7 +83,7 @@ export const parkingApi = {
 export const paymentsApi = {
   statusForMonth: (month) => supabase.from("payment_status").select("*").eq("month", month),
   allStatus: () => supabase.from("payment_status").select("tenant_id, month, status, total"),
-  allRaw: () => supabase.from("payments").select("tenant_id, month, govt, portion, assistance"),
+  allRaw: () => supabase.from("payments").select("tenant_id, month, govt, portion, assistance, extra"),
   save: (row) =>
     supabase.from("payments").upsert(row, { onConflict: "tenant_id,month" }).select().single(),
 };

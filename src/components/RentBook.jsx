@@ -435,7 +435,7 @@ export default function RentBook({ session, role }) {
           ) : (
             <>
               {view === "overview" && <Overview roll={roll} monthLabel={monthLabel} leaseAlerts={leaseAlerts} complianceAlerts={complianceAlerts} go={setView} parking={visibleParking} parkingPaid={parkingPaid} monthExpenses={monthExpenses} />}
-              {view === "collections" && <Collections roll={roll} monthLabel={monthLabel} month={month} setPay={setPay} parking={visibleParking} parkingRec={parkingPaid} parkingNotes={parkingNotes} setParkingReceived={setParkingReceived} setParkingNote={setParkingNote} />}
+              {view === "collections" && <Collections roll={roll} monthLabel={monthLabel} month={month} setPay={setPay} parking={visibleParking} parkingRec={parkingPaid} parkingNotes={parkingNotes} setParkingReceived={setParkingReceived} setParkingNote={setParkingNote} tenants={tenants} />}
               {view === "ledger" && <Ledger tenants={tenants} terms={rentTerms} rawPayments={rawPayments} />}
               {view === "expenses" && <Expenses expenses={expenses} monthExpenses={monthExpenses} monthLabel={monthLabel} month={month} tenants={activeTenants} onAdd={addExpense} onRemove={removeExpense} />}
               {view === "tenants" && <Tenants tenants={tenants} onEdit={setEditTenant} onAdd={() => setEditTenant("new")} />}
@@ -961,7 +961,7 @@ function PLRow({ label, v }) {
 }
 
 /* ================= COLLECTIONS ================= */
-function Collections({ roll, monthLabel, month, setPay, parking = [], parkingRec = {}, parkingNotes = {}, setParkingReceived, setParkingNote }) {
+function Collections({ roll, monthLabel, month, setPay, parking = [], parkingRec = {}, parkingNotes = {}, setParkingReceived, setParkingNote, tenants = [] }) {
   const isMobile = useIsMobile();
   const exportCsv = () => downloadCSV(
     `collections-${month || "month"}.csv`,
@@ -1055,16 +1055,17 @@ function Collections({ roll, monthLabel, month, setPay, parking = [], parkingRec
       </div>
 
       {parking.length > 0 && setParkingReceived && (
-        <CollectionsParking parking={parking} parkingRec={parkingRec} parkingNotes={parkingNotes} setParkingReceived={setParkingReceived} setParkingNote={setParkingNote} monthLabel={monthLabel} />
+        <CollectionsParking parking={parking} parkingRec={parkingRec} parkingNotes={parkingNotes} setParkingReceived={setParkingReceived} setParkingNote={setParkingNote} monthLabel={monthLabel} tenants={tenants} />
       )}
     </div>
   );
 }
 
 /* Parking reconciliation inside Collections — enter the amount received per spot. */
-function CollectionsParking({ parking, parkingRec, parkingNotes = {}, setParkingReceived, setParkingNote, monthLabel }) {
+function CollectionsParking({ parking, parkingRec, parkingNotes = {}, setParkingReceived, setParkingNote, monthLabel, tenants = [] }) {
   const expected = parking.reduce((s, p) => s + (+p.amount || 0), 0);
   const collected = parking.reduce((s, p) => s + (+parkingRec[p.id] || 0), 0);
+  const tenantPhone = (id) => { const t = tenants.find((x) => x.id === id); return t?.phone || ""; };
   return (
     <div style={{ ...S.card, padding: 0, overflow: "hidden", marginTop: 16 }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "14px 18px", borderBottom: "1px solid #eee9df", gap: 12, flexWrap: "wrap" }}>
@@ -1076,6 +1077,7 @@ function CollectionsParking({ parking, parkingRec, parkingNotes = {}, setParking
       </div>
       {parking.map((p, i) => (
         <ParkingRow key={p.id} p={p} received={+parkingRec[p.id] || 0} onCommit={(v) => setParkingReceived(p.id, v)}
+          contactPhone={tenantPhone(p.tenant_id)}
           note={parkingNotes[p.id] || ""} onCommitNote={setParkingNote ? (v) => setParkingNote(p.id, v) : undefined}
           last={i === parking.length - 1} />
       ))}
@@ -1905,6 +1907,7 @@ function Parking({ parking, parkingRec, monthLabel, month, setReceived, setActiv
   const collected = active.reduce((s, p) => s + (+parkingRec[p.id] || 0), 0);
   const activeSpotCount = active.reduce((s, p) => s + (+p.spots || 1), 0);
   const tenantName = (id) => { const t = tenants.find((x) => x.id === id); return t ? `${t.unit} · ${t.name}` : null; };
+  const tenantPhone = (id) => { const t = tenants.find((x) => x.id === id); return t?.phone || ""; };
   return (
     <div>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16, gap: 12, flexWrap: "wrap" }}>
@@ -1919,7 +1922,7 @@ function Parking({ parking, parkingRec, monthLabel, month, setReceived, setActiv
         {active.length === 0 ? (
           <div style={{ padding: 24, textAlign: "center", color: "#8a8681", fontSize: 13 }}>No active parking spots. Add one above — residents or non-residents.</div>
         ) : active.map((p, i) => (
-          <ParkingRow key={p.id} p={p} received={+parkingRec[p.id] || 0} onCommit={(v) => setReceived(p.id, v)} onEdit={() => setEdit(p)} tenantLabel={tenantName(p.tenant_id)} last={i === active.length - 1} />
+          <ParkingRow key={p.id} p={p} received={+parkingRec[p.id] || 0} onCommit={(v) => setReceived(p.id, v)} onEdit={() => setEdit(p)} tenantLabel={tenantName(p.tenant_id)} contactPhone={tenantPhone(p.tenant_id)} last={i === active.length - 1} />
         ))}
       </div>
       <div style={{ fontSize: 12, color: "#8a8681", marginTop: 10, display: "flex", gap: 8, alignItems: "center" }}>
@@ -1932,7 +1935,7 @@ function Parking({ parking, parkingRec, monthLabel, month, setReceived, setActiv
           <div style={{ ...S.card, padding: 0, overflow: "hidden", opacity: 0.75 }}>
             {inactive.map((p, i) => (
               <ParkingRow key={p.id} p={p} received={0} inactive
-                onEdit={() => setEdit(p)} tenantLabel={tenantName(p.tenant_id)} last={i === inactive.length - 1} />
+                onEdit={() => setEdit(p)} tenantLabel={tenantName(p.tenant_id)} contactPhone={tenantPhone(p.tenant_id)} last={i === inactive.length - 1} />
             ))}
           </div>
           <div style={{ fontSize: 12, color: "#8a8681", marginTop: 8 }}>
@@ -1950,8 +1953,10 @@ function Parking({ parking, parkingRec, monthLabel, month, setReceived, setActiv
 }
 
 /* One parking spot's received-amount entry for the month (reconciled, not automatic). */
-function ParkingRow({ p, received, onCommit, onEdit, tenantLabel, note, onCommitNote, inactive, last }) {
+function ParkingRow({ p, received, onCommit, onEdit, tenantLabel, contactPhone, note, onCommitNote, inactive, last }) {
   const expected = +p.amount || 0;
+  // Residents' spots fall back to the tenant's phone when the spot has none.
+  const phone = (p.phone || "").trim() || (contactPhone || "").trim();
   // "In rent" spots are driven by the tenant's rent status (a DB trigger keeps
   // them in sync), so they're shown read-only here.
   const inRent = p.method === "In rent" && !!p.tenant_id;
@@ -1974,9 +1979,9 @@ function ParkingRow({ p, received, onCommit, onEdit, tenantLabel, note, onCommit
             {p.spot}{(+p.spots || 1) > 1 ? ` · ${p.spots} spots` : ""} · {p.method} · expected <button onClick={() => onCommit?.(expected)} style={{ border: "none", background: "transparent", color: "#3a6ea5", fontWeight: 600, padding: 0, fontFamily: "'IBM Plex Mono',monospace", fontSize: 11.5, cursor: onCommit ? "pointer" : "default" }}>{money(expected)}</button>
             {tenantLabel === undefined ? null : tenantLabel ? <span style={{ color: "#7a5c17" }}> · {tenantLabel}</span> : <span style={{ color: "#a8a294" }}> · non-resident</span>}
           </div>
-          {p.phone && (
+          {phone && (
             <div style={{ fontSize: 11.5, color: "#8a8681", marginTop: 1, display: "flex", alignItems: "center", gap: 4 }}>
-              <Phone size={11} /> <a href={`tel:${p.phone}`} style={{ color: "#3a6ea5", textDecoration: "none" }}>{p.phone}</a>
+              <Phone size={11} /> <a href={`tel:${phone}`} style={{ color: "#3a6ea5", textDecoration: "none" }}>{phone}</a>
             </div>
           )}
           {(p.plate || p.make || p.model || p.vehicle_year) && (
@@ -2020,6 +2025,7 @@ function ParkingModal({ spot, tenants, propertyId, onClose, onSaved, flash, setA
   const [f, setF] = useState(spot || { name: "", spot: "", amount: 0, spots: 1, method: "Zelle", tenant_id: "", phone: "", plate: "", make: "", model: "", vehicle_year: "", start_month: "" });
   const [confirmDel, setConfirmDel] = useState(false);
   const set = (k, v) => setF((p) => ({ ...p, [k]: v }));
+  const assignedTenant = tenants.find((t) => t.id === f.tenant_id);
   const save = async () => {
     if (!(f.name || "").trim() && !(f.spot || "").trim()) { flash?.("error", "Add a name or a lot/spot label."); return; }
     const payload = {
@@ -2064,7 +2070,7 @@ function ParkingModal({ spot, tenants, propertyId, onClose, onSaved, flash, setA
             </select>
           </Field>
           <Field label="Starts (month)"><input style={S.field} type="month" value={(f.start_month || "").slice(0, 7)} onChange={(e) => set("start_month", e.target.value)} /></Field>
-          <Field label="Phone" span={2}><input style={S.field} type="tel" placeholder="Contact number (for non-residents)" value={f.phone || ""} onChange={(e) => set("phone", e.target.value)} /></Field>
+          <Field label="Phone" span={2}><input style={S.field} type="tel" placeholder={assignedTenant?.phone ? `Uses ${assignedTenant.name}'s number: ${assignedTenant.phone}` : "Contact number (for non-residents)"} value={f.phone || ""} onChange={(e) => set("phone", e.target.value)} /></Field>
 
           <FormSection>Vehicle</FormSection>
           <Field label="License plate"><input style={S.field} value={f.plate || ""} onChange={(e) => set("plate", e.target.value)} /></Field>
