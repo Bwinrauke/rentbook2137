@@ -20,8 +20,6 @@ export function useIsMobile(breakpoint = MOBILE_BP) {
 }
 
 /* ---------------- constants ---------------- */
-export const CURRENT_MONTH = "2026-07";
-
 export const MONTH_NAMES = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
 // Month keys are "YYYY-MM". These helpers let the app reach any month, not a fixed list.
@@ -44,6 +42,10 @@ export const thisMonthKey = () => {
   const d = new Date();
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
 };
+
+// The month the app opens on and treats as "now". Resolves at load time to the
+// real current month (was a frozen string before — which drifted out of date).
+export const CURRENT_MONTH = thisMonthKey();
 
 // Period grouping for the Summary view.
 export const periodKeyFor = (monthKey, grouping) => {
@@ -77,6 +79,31 @@ export const STATUS = {
 /* ---------------- helpers ---------------- */
 export const money = (n) =>
   (n < 0 ? "-" : "") + "$" + Math.abs(Number(n) || 0).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+/* ---------------- CSV export ---------------- */
+// Build a CSV string from a header row + array of rows (each an array of cells).
+export function toCSV(headers, rows) {
+  const esc = (v) => {
+    const s = v === null || v === undefined ? "" : String(v);
+    return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+  };
+  return [headers, ...rows].map((r) => r.map(esc).join(",")).join("\r\n");
+}
+// Trigger a client-side download of a CSV file (no server, no dependency).
+export function downloadCSV(filename, headers, rows) {
+  if (typeof document === "undefined") return;
+  const blob = new Blob(["﻿" + toCSV(headers, rows)], { type: "text/csv;charset=utf-8;" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+// Plain numeric string for CSV money cells (no $ or commas, 2 dp).
+export const csvNum = (n) => (Number(n) || 0).toFixed(2);
 
 export function reconcile(pay, tenant) {
   const govt = +pay?.govt || 0;
@@ -118,10 +145,14 @@ export function buildLedger(tenants, terms, rawPayments, currentMonth) {
   return tenants.map((t) => {
     const tterms = termsByTenant[t.id] || [];
     const firstTermMonth = tterms.length ? tterms[0].effective_from.slice(0, 7) : ledgerStart;
+    // An archived tenant stops accruing after the month they were archived, so
+    // their arrears reflect only the months they actually occupied the unit.
+    const archMonth = t.active === false ? (t.archived_at || "").slice(0, 7) : "";
     let govtBal = 0, tenantBal = 0;
     const detail = [];
     monthsDue.forEach((m) => {
       if (m.key < firstTermMonth) return;
+      if (archMonth && m.key > archMonth) return;
       const term = applicableTerm(tterms, m.key) || { lease_rent: t.lease_rent, govt_expected: t.govt_default, tenant_expected: t.portion_default };
       const pay = payMap[`${t.id}:${m.key}`];
       const govtRec = pay ? (+pay.govt + +pay.assistance) : 0;

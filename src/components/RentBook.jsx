@@ -3,7 +3,7 @@ import {
   Building2, LayoutDashboard, Receipt, Users, Grid3x3, Car,
   Check, Phone, Plus, X, Search, CalendarClock, Banknote, Pencil,
   ChevronRight, ChevronDown, ChevronLeft, Landmark, Wallet, LogOut, Trash2,
-  StickyNote, TrendingUp, Menu, Clock, AlertTriangle, Archive, MapPin, BarChart3,
+  StickyNote, TrendingUp, Menu, Clock, AlertTriangle, Archive, MapPin, BarChart3, Download,
 } from "lucide-react";
 import {
   tenantsApi, parkingApi, paymentsApi, rentTermsApi, expensesApi, notesApi, authApi, realtime,
@@ -13,6 +13,7 @@ import {
   S, STATUS, CURRENT_MONTH, EXPENSE_CATEGORIES, money, reconcile, buildLedger,
   Money, Variance, Stamp, UnitChip, Legend, BigStat, useIsMobile,
   addMonths, monthRange, monthLabelFor, thisMonthKey, periodKeyFor, periodLabelFor,
+  downloadCSV, csvNum,
 } from "../lib/ui";
 
 // True once `month` (a "YYYY-MM" key) has reached one calendar month before
@@ -151,6 +152,16 @@ export default function RentBook({ session, role }) {
   }, [monthStatus]);
   const monthExpenses = useMemo(() => expenses.filter((e) => (e.spent_on || "").slice(0, 7) === month), [expenses, month]);
 
+  // Tenants to consider for the viewed month: active tenants always, plus
+  // archived tenants in months they have a payment or that fall on/before the
+  // month they were archived — so archiving someone never erases their history.
+  const tenantsForMonth = useMemo(() => tenants.filter((t) => {
+    if (t.active !== false) return true;
+    if (statusMap[t.id]) return true;
+    const arch = (t.archived_at || "").slice(0, 7);
+    return arch !== "" && month <= arch;
+  }), [tenants, statusMap, month]);
+
   const setPay = useCallback(async (tenantId, field, value) => {
     const cur = statusMap[tenantId] || {};
     const row = {
@@ -172,7 +183,7 @@ export default function RentBook({ session, role }) {
     let expected = 0, collected = 0, govtTotal = 0, portionTotal = 0, assistanceTotal = 0, extraTotal = 0, paidCt = 0, partialCt = 0, owedCt = 0;
     // A tenant only enters the roll once the viewing month reaches one month
     // before their lease start — or as soon as they have a payment that month.
-    const visible = activeTenants.filter((t) => monthReached(t.lease_start, month) || statusMap[t.id]);
+    const visible = tenantsForMonth.filter((t) => monthReached(t.lease_start, month) || statusMap[t.id]);
     const rows = visible.map((t) => {
       const s = statusMap[t.id];
       const r = s
@@ -186,7 +197,7 @@ export default function RentBook({ session, role }) {
       return { t, r, pay };
     });
     return { rows, expected, collected, govtTotal, portionTotal, assistanceTotal, extraTotal, outstanding: expected - collected, paidCt, partialCt, owedCt };
-  }, [activeTenants, statusMap, month]);
+  }, [tenantsForMonth, statusMap, month]);
 
   const leaseAlerts = useMemo(() => {
     const ref = new Date(month + "-01");
@@ -197,18 +208,42 @@ export default function RentBook({ session, role }) {
       .sort((a, b) => a.days - b.days);
   }, [activeTenants, month]);
 
+  // Section 8 compliance clock: recertifications and HAP contract ends coming
+  // due (or overdue) within ~90 days of the viewed month.
+  const complianceAlerts = useMemo(() => {
+    const ref = new Date(month + "-01");
+    const items = [];
+    activeTenants.forEach((t) => {
+      const add = (kind, dateStr) => {
+        if (!dateStr) return;
+        const date = new Date(dateStr);
+        const days = Math.round((date - ref) / 86400000);
+        if (days <= 90) items.push({ t, kind, date, days, key: `${t.id}-${kind}` });
+      };
+      add("Recert", t.recert_due);
+      add("HAP end", t.hap_contract_end);
+    });
+    return items.sort((a, b) => a.days - b.days);
+  }, [activeTenants, month]);
+
   const saveTenant = async (t) => {
     const payload = { ...t };
     if (!payload.id) { delete payload.id; payload.property_id = propertyId; }
     const { data, error } = await tenantsApi.upsert(payload);
     if (error) { flash("error", `Couldn't save tenant — ${error.message}`); return; }
     if (!t.id && data) {
-      // The govt/tenant split is recorded per month in Collections, so the
-      // starting term just carries the lease total (govt assumed to cover it).
+      // Seed the tenant's starting term for the Arrears ledger. If a usual split
+      // was given, use it (so the ledger shows the right party behind); otherwise
+      // assume the government share covers the full rent.
+      const gov = +t.govt_default || 0;
+      const ten = +t.portion_default || 0;
+      const hasSplit = gov > 0 || ten > 0;
       await rentTermsApi.add({
         tenant_id: data.id,
         effective_from: t.lease_start || `${CURRENT_MONTH}-01`,
-        lease_rent: t.lease_rent, govt_expected: t.lease_rent, tenant_expected: 0,
+        lease_rent: t.lease_rent,
+        govt_expected: hasSplit ? gov : t.lease_rent,
+        tenant_expected: hasSplit ? ten : 0,
         note: "Initial term",
       });
     }
@@ -394,14 +429,14 @@ export default function RentBook({ session, role }) {
             <div style={{ color: "#8a8681", fontFamily: "'Space Grotesk',sans-serif", padding: 40 }}>Loading the rent book…</div>
           ) : (
             <>
-              {view === "overview" && <Overview roll={roll} monthLabel={monthLabel} leaseAlerts={leaseAlerts} go={setView} parking={visibleParking} parkingPaid={parkingPaid} monthExpenses={monthExpenses} />}
-              {view === "collections" && <Collections roll={roll} monthLabel={monthLabel} setPay={setPay} parking={visibleParking} parkingRec={parkingPaid} parkingNotes={parkingNotes} setParkingReceived={setParkingReceived} setParkingNote={setParkingNote} />}
-              {view === "ledger" && <Ledger tenants={activeTenants} terms={rentTerms} rawPayments={rawPayments} />}
+              {view === "overview" && <Overview roll={roll} monthLabel={monthLabel} leaseAlerts={leaseAlerts} complianceAlerts={complianceAlerts} go={setView} parking={visibleParking} parkingPaid={parkingPaid} monthExpenses={monthExpenses} />}
+              {view === "collections" && <Collections roll={roll} monthLabel={monthLabel} month={month} setPay={setPay} parking={visibleParking} parkingRec={parkingPaid} parkingNotes={parkingNotes} setParkingReceived={setParkingReceived} setParkingNote={setParkingNote} />}
+              {view === "ledger" && <Ledger tenants={tenants} terms={rentTerms} rawPayments={rawPayments} />}
               {view === "expenses" && <Expenses expenses={expenses} monthExpenses={monthExpenses} monthLabel={monthLabel} month={month} tenants={activeTenants} onAdd={addExpense} onRemove={removeExpense} />}
               {view === "tenants" && <Tenants tenants={tenants} onEdit={setEditTenant} onAdd={() => setEditTenant("new")} />}
               {view === "parking" && <Parking parking={parking} parkingRec={parkingPaid} monthLabel={monthLabel} setReceived={setParkingReceived} setActive={setParkingActive} tenants={activeTenants} propertyId={propertyId} onChanged={loadStatic} flash={flash} />}
               {view === "log" && <LogTab notes={buildingNotes} onAdd={(body) => addNote({ tenant_id: null, body })} onRemove={removeNote} />}
-              {view === "summary" && <Summary tenants={activeTenants} allStatus={allStatus} allParkPaid={allParkPaid} parking={parking} expenses={expenses} onJump={(m) => { setMonth(m); setView("collections"); }} />}
+              {view === "summary" && <Summary tenants={tenants} allStatus={allStatus} allParkPaid={allParkPaid} parking={parking} expenses={expenses} onJump={(m) => { setMonth(m); setView("collections"); }} />}
               {view === "activity" && <Activity rows={audit} tenants={tenants} onRefresh={loadAudit} />}
             </>
           )}
@@ -472,6 +507,15 @@ function MonthPicker({ month, options, onChange, onShift, compact }) {
   );
 }
 
+/* Small CSV-export button, shared across the data views. */
+function ExportBtn({ onClick, label = "Export CSV" }) {
+  return (
+    <button onClick={onClick} style={{ ...S.ghostBtn, display: "inline-flex", alignItems: "center", gap: 6, padding: "7px 12px", fontSize: 12.5 }}>
+      <Download size={14} /> {label}
+    </button>
+  );
+}
+
 /* ================= SUMMARY (by month / quarter / year) ================= */
 function Summary({ tenants, allStatus, allParkPaid, parking, expenses, onJump }) {
   const isMobile = useIsMobile();
@@ -494,11 +538,19 @@ function Summary({ tenants, allStatus, allParkPaid, parking, expenses, onJump })
       a.collected += +s.total || 0; a.units += 1;
       if (s.status === "paid") a.paid += 1; else if (s.status === "partial") a.partial += 1; else a.owed += 1;
     });
-    // expected rent per month = lease rent for tenants inside their collection window
+    // expected rent per month = lease rent for tenants inside their collection
+    // window (and not past the month an archived tenant moved out).
     const monthsSeen = new Set(scopedStatus.map((s) => s.month));
     monthsSeen.forEach((mk) => {
       const a = bump(mk);
-      tenants.forEach((t) => { if (monthReached(t.lease_start, mk)) a.expected += +t.lease_rent || 0; });
+      tenants.forEach((t) => {
+        if (!monthReached(t.lease_start, mk)) return;
+        if (t.active === false) {
+          const arch = (t.archived_at || "").slice(0, 7);
+          if (arch && mk > arch) return;
+        }
+        a.expected += +t.lease_rent || 0;
+      });
     });
     // parking collected per month (actual received amount, this property's spots)
     allParkPaid.forEach((pp) => { if (spotIds.has(pp.spot_id)) bump(pp.month).parking += +pp.amount || 0; });
@@ -515,6 +567,12 @@ function Summary({ tenants, allStatus, allParkPaid, parking, expenses, onJump })
     expenses: s.expenses + r.expenses, income: s.income + r.income, net: s.net + r.net, outstanding: s.outstanding + r.outstanding,
   }), { expected: 0, collected: 0, parking: 0, expenses: 0, income: 0, net: 0, outstanding: 0 });
 
+  const exportCsv = () => downloadCSV(
+    `summary-by-${grouping}.csv`,
+    ["Period", "Expected", "Rent collected", "Parking", "Outstanding", "Expenses", "Net operating"],
+    rows.map((r) => [periodLabelFor(r.period, grouping), csvNum(r.expected), csvNum(r.collected), csvNum(r.parking), csvNum(r.outstanding), csvNum(r.expenses), csvNum(r.net)]),
+  );
+
   return (
     <div>
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(180px,1fr))", gap: 14, marginBottom: 18 }}>
@@ -524,7 +582,7 @@ function Summary({ tenants, allStatus, allParkPaid, parking, expenses, onJump })
         <BigStat label="Net operating" value={money(tot.net)} sub="income − expenses" accent={tot.net >= 0 ? "#0f7a54" : "#a83232"} />
       </div>
 
-      <div style={{ display: "flex", gap: 8, marginBottom: 14 }}>
+      <div style={{ display: "flex", gap: 8, marginBottom: 14, flexWrap: "wrap", alignItems: "center" }}>
         {[["month", "By month"], ["quarter", "By quarter"], ["year", "By year"]].map(([k, lbl]) => (
           <button key={k} onClick={() => setGrouping(k)} style={{
             ...S.pill, cursor: "pointer",
@@ -532,6 +590,7 @@ function Summary({ tenants, allStatus, allParkPaid, parking, expenses, onJump })
             border: grouping === k ? "none" : "1px solid #ddd7cb",
           }}>{lbl}</button>
         ))}
+        <div style={{ marginLeft: "auto" }}>{rows.length > 0 && <ExportBtn onClick={exportCsv} />}</div>
       </div>
 
       <div style={{ ...S.card, padding: 0, overflow: "hidden" }}>
@@ -709,7 +768,7 @@ function Activity({ rows, tenants, onRefresh }) {
 }
 
 /* ================= OVERVIEW ================= */
-function Overview({ roll, monthLabel, leaseAlerts, go, parking, parkingPaid, monthExpenses }) {
+function Overview({ roll, monthLabel, leaseAlerts, complianceAlerts = [], go, parking, parkingPaid, monthExpenses }) {
   const isMobile = useIsMobile();
   const rate = roll.expected ? Math.round((roll.collected / roll.expected) * 100) : 0;
   const owedRows = roll.rows.filter((x) => x.r.status !== "paid");
@@ -844,6 +903,35 @@ function Overview({ roll, monthLabel, leaseAlerts, go, parking, parkingPaid, mon
           ))}
         </div>
       </div>
+
+      <div style={{ ...S.card, marginTop: 16 }}>
+        <div style={{ ...S.cardTitle, marginBottom: 12, display: "flex", alignItems: "center", gap: 8 }}>
+          <Clock size={15} color="#8a6a1e" /> Recertifications &amp; HAP contracts
+        </div>
+        {complianceAlerts.length === 0 ? (
+          <div style={{ color: "#8a8681", fontSize: 13, padding: "8px 0" }}>Nothing due in the next 90 days (for units with recert / HAP dates on file).</div>
+        ) : (
+          <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "1fr 1fr", gap: "0 24px" }}>
+            {complianceAlerts.map(({ t, kind, date, days, key }) => (
+              <div key={key} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "9px 0", borderBottom: "1px solid #f0ece3" }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 9, minWidth: 0 }}>
+                  <UnitChip unit={t.unit} />
+                  <div style={{ minWidth: 0 }}>
+                    <div style={{ fontSize: 13, fontWeight: 600, color: "#1c2836", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{t.name}</div>
+                    <div style={{ fontSize: 11, color: "#8a8681" }}>{kind === "Recert" ? "Recertification due" : "HAP contract ends"}</div>
+                  </div>
+                </div>
+                <div style={{ textAlign: "right", flexShrink: 0 }}>
+                  <div style={{ fontSize: 12.5, fontWeight: 700, color: days < 0 ? "#a83232" : days <= 30 ? "#9a6511" : "#1c2836", fontFamily: "'IBM Plex Mono',monospace" }}>
+                    {days < 0 ? `${Math.abs(days)}d overdue` : `${days}d`}
+                  </div>
+                  <div style={{ fontSize: 11, color: "#8a8681" }}>{date.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}</div>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
     </div>
   );
 }
@@ -858,16 +946,25 @@ function PLRow({ label, v }) {
 }
 
 /* ================= COLLECTIONS ================= */
-function Collections({ roll, monthLabel, setPay, parking = [], parkingRec = {}, parkingNotes = {}, setParkingReceived, setParkingNote }) {
+function Collections({ roll, monthLabel, month, setPay, parking = [], parkingRec = {}, parkingNotes = {}, setParkingReceived, setParkingNote }) {
   const isMobile = useIsMobile();
+  const exportCsv = () => downloadCSV(
+    `collections-${month || "month"}.csv`,
+    ["Unit", "Tenant", "Program", "Lease rent", "Govt (HAP)", "Tenant portion", "Assistance", "Extra", "Check #", "Collected", "Variance", "Status", "Notes"],
+    roll.rows.map(({ t, r, pay }) => [
+      t.unit, t.name, t.program, csvNum(r.rent), csvNum(r.govt), csvNum(r.portion), csvNum(r.assistance), csvNum(r.extra),
+      pay.check_num || "", csvNum(r.total), csvNum(r.variance), r.status, pay.notes || "",
+    ]),
+  );
   return (
     <div>
       <div style={{ ...S.card, padding: 0, overflow: "hidden" }}>
         <div style={{ display: "flex", flexDirection: isMobile ? "column" : "row", justifyContent: "space-between", alignItems: isMobile ? "flex-start" : "center", gap: isMobile ? 6 : 0, padding: "14px 18px", borderBottom: "1px solid #eee9df" }}>
           <div style={S.cardTitle}>Reconciliation · {monthLabel}</div>
-          <div style={{ display: "flex", gap: 20, fontFamily: "'IBM Plex Mono',monospace", fontSize: 12.5 }}>
+          <div style={{ display: "flex", gap: 16, alignItems: "center", fontFamily: "'IBM Plex Mono',monospace", fontSize: 12.5 }}>
             <span style={{ color: "#8a8681" }}>Collected <b style={{ color: "#0f7a54" }}>{money(roll.collected)}</b></span>
             <span style={{ color: "#8a8681" }}>Outstanding <b style={{ color: roll.outstanding > 0.5 ? "#a83232" : "#0f7a54" }}>{money(roll.outstanding)}</b></span>
+            {roll.rows.length > 0 && <ExportBtn onClick={exportCsv} />}
           </div>
         </div>
         {isMobile ? (
@@ -1080,11 +1177,21 @@ function Bal({ v, size = 13 }) {
 
 function Ledger({ tenants, terms, rawPayments }) {
   const isMobile = useIsMobile();
-  const rows = useMemo(() => buildLedger(tenants, terms, rawPayments, CURRENT_MONTH), [tenants, terms, rawPayments]);
+  // Archived tenants stay in the ledger only while they still owe (or hold a
+  // credit) — once settled they drop off, but their history is never lost.
+  const rows = useMemo(
+    () => buildLedger(tenants, terms, rawPayments, CURRENT_MONTH).filter((r) => r.t.active !== false || Math.abs(r.totalBal) > 0.5),
+    [tenants, terms, rawPayments],
+  );
   const [open, setOpen] = useState(null);
   const tenantArrears = rows.reduce((s, r) => s + Math.max(r.tenantBal, 0), 0);
   const govtArrears = rows.reduce((s, r) => s + Math.max(r.govtBal, 0), 0);
   const netOutstanding = rows.reduce((s, r) => s + r.totalBal, 0);
+  const exportCsv = () => downloadCSV(
+    "arrears-ledger.csv",
+    ["Unit", "Tenant", "Program", "Govt balance", "Tenant balance", "Total owed"],
+    rows.map(({ t, govtBal, tenantBal, totalBal }) => [t.unit, t.name, t.program, csvNum(govtBal), csvNum(tenantBal), csvNum(totalBal)]),
+  );
 
   return (
     <div>
@@ -1097,7 +1204,10 @@ function Ledger({ tenants, terms, rawPayments }) {
       <div style={{ ...S.card, padding: 0, overflow: "hidden" }}>
         <div style={{ padding: "14px 18px", borderBottom: "1px solid #eee9df", display: "flex", flexDirection: isMobile ? "column" : "row", gap: isMobile ? 4 : 0, justifyContent: "space-between", alignItems: isMobile ? "flex-start" : "center" }}>
           <div style={S.cardTitle}>Balances by tenant</div>
-          <div style={{ fontSize: 12, color: "#8a8681" }}>Red = owed to you · (green) = credit / overpaid</div>
+          <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+            <div style={{ fontSize: 12, color: "#8a8681" }}>Red = owed to you · (green) = credit / overpaid</div>
+            {rows.length > 0 && <ExportBtn onClick={exportCsv} />}
+          </div>
         </div>
         {isMobile ? (
           <div style={{ padding: 12, display: "flex", flexDirection: "column", gap: 10 }}>
@@ -1248,6 +1358,11 @@ function Expenses({ expenses, monthExpenses, monthLabel, month, tenants, onAdd, 
   });
   const catRows = Object.entries(byCategory).sort((a, b) => b[1] - a[1]);
   const venRows = Object.entries(byVendor).sort((a, b) => b[1] - a[1]).slice(0, 6);
+  const exportCsv = () => downloadCSV(
+    `expenses-${scope === "month" ? month : "all-time"}.csv`,
+    ["Date", "Category", "Vendor", "Unit", "Note", "Amount"],
+    shown.map((e) => [e.spent_on, e.category || "", e.vendor || "", e.unit || "Building", e.note || "", csvNum(e.amount)]),
+  );
 
   return (
     <div>
@@ -1277,7 +1392,10 @@ function Expenses({ expenses, monthExpenses, monthLabel, month, tenants, onAdd, 
       )}
 
       <div style={{ ...S.card, padding: 0, overflow: "hidden" }}>
-        <div style={{ padding: "13px 18px", borderBottom: "1px solid #eee9df" }}><div style={S.cardTitle}>Entries</div></div>
+        <div style={{ padding: "13px 18px", borderBottom: "1px solid #eee9df", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <div style={S.cardTitle}>Entries</div>
+          {shown.length > 0 && <ExportBtn onClick={exportCsv} />}
+        </div>
         {shown.length === 0 ? (
           <div style={{ padding: 22, textAlign: "center", color: "#8a8681", fontSize: 13 }}>No expenses logged {scope === "month" ? `for ${monthLabel}` : "yet"}. Add one above.</div>
         ) : isMobile ? (
@@ -1487,6 +1605,7 @@ function TenantModal({ tenant, terms, tenantNotes, propertyId, onClose, onSave, 
     program: "Section 8", phone: "", alt_phone: "", email: "",
     mailing_address: "", emergency_name: "", emergency_phone: "", household_size: "",
     voucher_number: "", pha_name: "", pha_contact: "", hap_contract_start: "", hap_contract_end: "", recert_due: "",
+    govt_default: 0, portion_default: 0,
     active: true,
   });
   const [confirmDel, setConfirmDel] = useState(false);
@@ -1551,9 +1670,11 @@ function TenantModal({ tenant, terms, tenantNotes, propertyId, onClose, onSave, 
           <FormSection>Rent</FormSection>
           <Field label="Lease rent (total)"><input style={S.field} inputMode="decimal" value={f.lease_rent} onChange={(e) => num("lease_rent", e.target.value)} /></Field>
           <div />
+          <Field label="Usual HAP (govt) share"><input style={S.field} inputMode="decimal" placeholder="0.00" value={f.govt_default ?? 0} onChange={(e) => num("govt_default", e.target.value)} /></Field>
+          <Field label="Usual tenant share"><input style={S.field} inputMode="decimal" placeholder="0.00" value={f.portion_default ?? 0} onChange={(e) => num("portion_default", e.target.value)} /></Field>
           <div style={{ gridColumn: "1 / -1", fontSize: 12, color: "#6b6b66", display: "flex", alignItems: "flex-start", gap: 7, background: "#faf8f3", padding: "10px 12px", borderRadius: 8 }}>
             <MapPin size={14} color="#b8892b" style={{ marginTop: 1, flexShrink: 0 }} />
-            <span>The <b>govt / tenant split</b> is entered each month on the <b>Collections</b> tab — it can change month to month (recerts, assistance, shelter contributions). Only the total lease rent lives here.</span>
+            <span>The <b>actual monthly split</b> is entered on <b>Collections</b> and can change month to month (recerts, assistance, shelter contributions). The <b>usual HAP / tenant shares</b> above are only the starting baseline the <b>Arrears ledger</b> uses to tell whether the agency or the tenant is behind — refine any period in the Rent schedule below.</span>
           </div>
         </div>
 
