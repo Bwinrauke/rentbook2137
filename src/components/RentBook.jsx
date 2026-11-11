@@ -991,12 +991,12 @@ function Collections({ roll, monthLabel, month, setPay, parking = [], parkingRec
             </div>
           </div>
         ) : (
-        <div style={{ overflowX: "auto" }}>
+        <div style={{ overflow: "auto", maxHeight: "calc(100vh - 230px)" }}>
           <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 980 }}>
             <thead>
               <tr>
                 {["Unit", "Tenant", "Lease rent", "Govt (HAP)", "Tenant portion", "Assistance", "Extra", "Check #", "Collected", "Variance", "Status"].map((h, i) => (
-                  <th key={h} style={{ ...S.th, textAlign: i >= 2 && i <= 9 ? "right" : "left" }}>{h}</th>
+                  <th key={h} style={{ ...S.th, textAlign: i >= 2 && i <= 9 ? "right" : "left", position: "sticky", top: 0, zIndex: 2, boxShadow: "inset 0 -1px 0 #ece7dc" }}>{h}</th>
                 ))}
               </tr>
             </thead>
